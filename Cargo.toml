@@ -1,7 +1,7 @@
 [package]
 name = "sqlite3mc-src"
 # SQLite3MC X.Y.Z is (100X+Y).Z.n, where n counts our own republishes of that release.
-version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
+version = "204.0.0+sqlite3mc-2.4.0-sqlite-3.53.4"
 edition = "2021"
 rust-version = "1.81"
 description = "Untouched SQLite3 Multiple Ciphers amalgamation for Rust -sys crates to build"
