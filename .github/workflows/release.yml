@@ -1,0 +1,80 @@
+---
+name: Release
+
+"on":
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # crates.io trusts only this repository, workflow file and environment.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
+      - name: Tag matches the crate and sits on main
+        id: crate
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml | jq -r '.packages[0].version')
+          if [ "v${version%%+*}" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match crate version $version" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor HEAD origin/main
+          status=$(curl -s -o /dev/null -w '%{http_code}' -A "sqlite3mc-src release workflow" \
+            "https://crates.io/api/v1/crates/sqlite3mc-src/${version}")
+          if [ "$status" = 200 ]; then
+            echo "sqlite3mc-src $version is already on crates.io"
+          else
+            echo "publish=yes" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Vendored files match the release
+        run: |
+          ./upgrade.sh
+          git diff --exit-code
+
+      - run: cargo test --all-targets
+
+      - if: steps.crate.outputs.publish == 'yes'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - if: steps.crate.outputs.publish == 'yes'
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.crate.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "sqlite3mc-src $VERSION on [crates.io](https://crates.io/crates/sqlite3mc-src/$VERSION)."
