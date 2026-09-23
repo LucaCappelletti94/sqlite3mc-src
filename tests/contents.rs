@@ -45,7 +45,7 @@ fn header_carries_the_declared_sqlite_version() {
 }
 
 #[test]
-fn crate_version_encodes_the_sqlite3mc_release() {
+fn crate_version_encodes_the_release() {
     let mut parts = SQLITE3MC_VERSION
         .split('.')
         .map(|part| part.parse::<u64>().unwrap());
@@ -54,12 +54,15 @@ fn crate_version_encodes_the_sqlite3mc_release() {
         parts.next().unwrap(),
         parts.next().unwrap(),
     );
-    assert_eq!(
-        env!("CARGO_PKG_VERSION_MAJOR").parse::<u64>().unwrap(),
-        major * 100 + minor
+    let (numbers, metadata) = env!("CARGO_PKG_VERSION")
+        .split_once('+')
+        .expect("the crate version carries build metadata");
+    assert!(
+        numbers.starts_with(&format!("{}.{patch}.", major * 100 + minor)),
+        "{numbers} does not encode SQLite3MC {SQLITE3MC_VERSION}"
     );
     assert_eq!(
-        env!("CARGO_PKG_VERSION_MINOR").parse::<u64>().unwrap(),
-        patch
+        metadata,
+        format!("sqlite3mc-{SQLITE3MC_VERSION}-sqlite-{SQLITE_VERSION}")
     );
 }
