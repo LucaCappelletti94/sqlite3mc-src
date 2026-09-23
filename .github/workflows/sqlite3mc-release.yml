@@ -10,10 +10,16 @@ name: SQLite3MC release
         description: SQLite3MC release to vendor, such as 2.5.2. Empty means the latest.
         required: false
         type: string
+      retry:
+        description: Vendor it even if its pull request was closed unmerged.
+        required: false
+        type: boolean
+        default: false
 
 # Every write goes through the app token, so the workflow token stays read-only.
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}
@@ -35,22 +41,31 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           REQUESTED: ${{ inputs.version }}
+          RETRY: ${{ inputs.retry }}
         run: |
           set -euo pipefail
           pinned=$(sed -nE 's/^pub const SQLITE3MC_VERSION: &str = "(.*)";$/\1/p' src/lib.rs)
           if [ -n "$REQUESTED" ]; then
             target=$REQUESTED
-            [ "$target" != "$pinned" ] && echo "moved=yes" >> "$GITHUB_OUTPUT"
+            [ "$target" != "$pinned" ] && moved=yes
           else
             target=$(gh release view --repo utelle/SQLite3MultipleCiphers --json tagName --jq '.tagName | ltrimstr("v")')
             newest=$(printf '%s\n%s\n' "$pinned" "$target" | sort -V | tail -n 1)
-            if [ "$target" != "$pinned" ] && [ "$newest" = "$target" ]; then
-              echo "moved=yes" >> "$GITHUB_OUTPUT"
-            fi
+            [ "$target" != "$pinned" ] && [ "$newest" = "$target" ] && moved=yes
+          fi
+          echo "pinned $pinned, target $target"
+          # A pull request closed unmerged is a rejection, which only a retry dispatch overrides.
+          rejected=$(gh pr list --head "sqlite3mc/v$target" --state closed --json mergedAt \
+            --jq '[.[] | select(.mergedAt == null)] | length')
+          if [ "${moved:-}" = yes ] && [ "$rejected" -gt 0 ] && [ "$RETRY" != true ]; then
+            echo "SQLite3MC $target was rejected by closing its pull request, so it is skipped"
+            moved=
           fi
           echo "target=$target" >> "$GITHUB_OUTPUT"
-          echo "pinned $pinned, target $target"
+          [ "${moved:-}" = yes ] && echo "moved=yes" >> "$GITHUB_OUTPUT"
+          true
 
       - if: steps.release.outputs.moved == 'yes'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -76,6 +91,7 @@ jobs:
         name: Open the pull request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
           VERSION: ${{ steps.release.outputs.target }}
         run: |
@@ -90,17 +106,28 @@ jobs:
           git checkout -b "$branch"
           git add Cargo.toml Cargo.lock smoke/Cargo.lock upgrade.sh src/lib.rs sqlite3mc
           git commit -m "$title"
+          # An unchanged push would only rerun every check, so the branch moves only when its
+          # content changed or main moved under it.
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch origin "$branch":refs/remotes/origin/"$branch"
-            git push --force-with-lease origin HEAD:refs/heads/"$branch"
+            git fetch --depth=2 origin "$branch":refs/remotes/origin/"$branch"
+            if [ "$(git rev-parse "origin/$branch^{tree}")" = "$(git rev-parse "HEAD^{tree}")" ] \
+              && [ "$(git rev-parse "origin/$branch^")" = "$(git rev-parse HEAD^)" ]; then
+              echo "$branch already holds this content on the current main"
+            else
+              git push --force-with-lease origin HEAD:refs/heads/"$branch"
+            fi
           else
             git push origin HEAD:refs/heads/"$branch"
           fi
-          # An older release's pull request is superseded by this one.
-          gh pr list --state open --json number,headRefName \
-            --jq ".[] | select(.headRefName | startswith(\"sqlite3mc/v\")) | select(.headRefName != \"$branch\") | .number" \
-            | while read -r n; do gh pr close "$n" --comment "Superseded by SQLite3MC $VERSION."; done
-          gh pr view "$branch" --json number >/dev/null 2>&1 || gh pr create \
+          open=$(gh pr list --head "$branch" --state open --json number --jq length)
+          [ "$open" -gt 0 ] || gh pr create \
             --base main --head "$branch" \
             --title "$title" \
             --body "SQLite3MC $VERSION, from https://github.com/utelle/SQLite3MultipleCiphers/releases/tag/v$VERSION. The archive's checksum was taken from the release's SHA256SUMS after its Sigstore signature verified against SQLite3MC's own release workflow, and the vendored files were extracted from the archive unchanged."
+          # Every other release branch is superseded, whether its pull request is open or closed.
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"sqlite3mc/v\")) | select(.headRefName != \"$branch\") | .number" \
+            | while read -r n; do gh pr close "$n" --comment "Superseded by SQLite3MC $VERSION."; done
+          git ls-remote --heads origin 'refs/heads/sqlite3mc/v*' | cut -f2 \
+            | { grep -vx "refs/heads/$branch" || true; } \
+            | while read -r ref; do git push origin --delete "$ref"; done
