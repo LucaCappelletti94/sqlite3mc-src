@@ -1,0 +1,98 @@
+---
+name: SQLite3MC release
+
+"on":
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vendor:
+    name: Vendor the latest SQLite3MC release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # A manual dispatch may select another ref, and only main's tree belongs here.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Compare the pinned and the latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest=$(gh release view --repo utelle/SQLite3MultipleCiphers --json tagName --jq '.tagName | ltrimstr("v")')
+          pinned=$(sed -nE 's/^pub const SQLITE3MC_VERSION: &str = "(.*)";$/\1/p' src/lib.rs)
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          newest=$(printf '%s\n%s\n' "$pinned" "$latest" | sort -V | tail -n 1)
+          if [ "$latest" != "$pinned" ] && [ "$newest" = "$latest" ]; then
+            echo "moved=yes" >> "$GITHUB_OUTPUT"
+          fi
+          echo "pinned $pinned, latest $latest"
+
+      - if: steps.release.outputs.moved == 'yes'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - if: steps.release.outputs.moved == 'yes'
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup toolchain install 1.81 --profile minimal
+
+      - if: steps.release.outputs.moved == 'yes'
+        run: ./bump.sh "${{ steps.release.outputs.latest }}"
+
+      # A pull request opened with GITHUB_TOKEN starts no workflow, so the gate runs here.
+      - if: steps.release.outputs.moved == 'yes'
+        run: |
+          set -euo pipefail
+          cargo +stable fmt --check
+          cargo +stable clippy --all-targets -- -D warnings
+          cargo +stable test --all-targets
+          cargo +stable test --doc
+          cargo +1.81 test --all-targets
+          cargo +stable package --allow-dirty
+
+      - if: steps.release.outputs.moved == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.latest }}
+        run: |
+          set -euo pipefail
+          sqlite=$(sed -nE 's/^pub const SQLITE_VERSION: &str = "(.*)";$/\1/p' src/lib.rs)
+          branch="sqlite3mc/v$VERSION"
+          title="Vendor SQLite3MC $VERSION on SQLite $sqlite"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Cargo.toml Cargo.lock upgrade.sh src/lib.rs sqlite3mc
+          git commit -m "$title"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch origin "$branch":refs/remotes/origin/"$branch"
+            git push --force-with-lease origin HEAD:refs/heads/"$branch"
+          else
+            git push origin HEAD:refs/heads/"$branch"
+          fi
+          # An older release's pull request is superseded by this one.
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"sqlite3mc/v\")) | select(.headRefName != \"$branch\") | .number" \
+            | while read -r n; do gh pr close "$n" --comment "Superseded by SQLite3MC $VERSION."; done
+          gh pr view "$branch" --json number >/dev/null 2>&1 || gh pr create \
+            --base main --head "$branch" \
+            --title "$title" \
+            --body "$(printf '%s\n' \
+              "SQLite3MC $VERSION, from https://github.com/utelle/SQLite3MultipleCiphers/releases/tag/v$VERSION. The archive's checksum was taken from the release's SHA256SUMS after its Sigstore signature verified against SQLite3MC's own release workflow, and the vendored files were extracted from the archive unchanged." \
+              '' \
+              'fmt, clippy, the tests on stable and 1.81 and cargo package passed in the job that opened this. A pull request opened by the workflow token starts no other workflow, so close and reopen it to run CI, CodeQL, Coverage and Sonar here.')"

@@ -10,9 +10,9 @@ The [SQLite3 Multiple Ciphers](https://github.com/utelle/SQLite3MultipleCiphers)
 ```rust
 let source = sqlite3mc_src::source_dir().join(sqlite3mc_src::SOURCE_FILE);
 assert!(source.is_file());
-assert_eq!(sqlite3mc_src::SQLITE3MC_VERSION, "2.5.1");
+assert!(sqlite3mc_src::source_dir().join(sqlite3mc_src::HEADER_FILE).is_file());
 ```
 
-The version encodes the SQLite3MC release, so `205.1.x` carries SQLite3MC 2.5.1 and a consumer requiring `205.1` receives SQLite3MC 2.5 patch releases only. SQLite3MC is MIT licensed, and the amalgamation also contains public-domain code (SQLite among it) and Argon2 under CC0-1.0 or Apache-2.0.
+The version encodes the SQLite3MC release, so for example `205.1.x` carries SQLite3MC 2.5.1 and a consumer requiring `205.1` receives SQLite3MC 2.5 patch releases only. SQLite3MC is MIT licensed, and the amalgamation also contains public-domain code (SQLite among it) and Argon2 under CC0-1.0 or Apache-2.0.
 
-The files are refreshed with `upgrade.sh` in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src), which checks the release archive's SHA-256 before extracting them, and CI re-runs it to prove the vendored bytes match the release.
+A daily workflow in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src) opens a pull request for each new SQLite3MC release, taking the archive's checksum only from the release's Sigstore-signed `SHA256SUMS`. CI re-runs `upgrade.sh` to prove the vendored bytes match the pinned release.

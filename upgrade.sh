@@ -1,5 +1,7 @@
 #!/bin/sh -e
 
+# Re-vendors the pinned release byte for byte. bump.sh moves the pins.
+
 SQLITE3MC_VERSION="2.5.1"
 SQLITE_VERSION="3.53.4"
 ARCHIVE_SHA256="4125f8ff275ea953dabb3289331b20a0e76d4fc060f57148f4a5df3bf3b0d5e0"
@@ -17,5 +19,3 @@ done
 rm -f "$ARCHIVE"
 curl -sfL -o sqlite3mc/LICENSE "https://raw.githubusercontent.com/utelle/SQLite3MultipleCiphers/v${SQLITE3MC_VERSION}/LICENSE"
 (cd sqlite3mc && shasum -a 256 sqlite3mc_amalgamation.c sqlite3mc_amalgamation.h sqlite3ext.h LICENSE > SHA256SUMS)
-
-echo "Now set SQLITE3MC_VERSION and SQLITE_VERSION in src/lib.rs and the version in Cargo.toml."
