@@ -10,11 +10,13 @@
 The [SQLite3 Multiple Ciphers](https://github.com/utelle/SQLite3MultipleCiphers) amalgamation, byte for byte as released, for `-sys` crates to compile with their own options. It compiles nothing and sets no defines, so every consumer keeps its own flags while one `Cargo.lock` gives them all the same source.
 
 ```rust
-let source = sqlite3mc_src::source_dir().join(sqlite3mc_src::SOURCE_FILE);
-assert!(source.is_file());
-assert!(sqlite3mc_src::source_dir().join(sqlite3mc_src::HEADER_FILE).is_file());
+let dir = sqlite3mc_src::source_dir();
+assert!(dir.join(sqlite3mc_src::SOURCE_FILE).is_file());
+assert!(dir.join(sqlite3mc_src::HEADER_FILE).is_file());
 ```
 
-The version encodes the SQLite3MC release, so for example `205.1.x` carries SQLite3MC 2.5.1, and a consumer requiring `205.1` also accepts every later 2.5 patch release but never 2.6. A patch release can wrap a newer SQLite, so a `-sys` crate that commits bindings regenerates them when it moves, and `SQLITE_VERSION` names the SQLite actually compiled. SQLite3MC is MIT licensed, and the amalgamation also contains public-domain code (SQLite among it) and Argon2 under CC0-1.0 or Apache-2.0.
+The version encodes the release, so `205.1.x` is SQLite3MC 2.5.1. A `205.1` requirement also accepts later 2.5 patch releases, never 2.6. Those may wrap a newer SQLite, named by `SQLITE_VERSION`, so a `-sys` crate with committed bindings regenerates them.
+
+SQLite3MC is MIT licensed, and the amalgamation also carries public-domain code and Argon2 under CC0-1.0 or Apache-2.0.
 
 A daily workflow in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src) opens a pull request for each new SQLite3MC release, taking the archive's checksum only from the release's Sigstore-signed `SHA256SUMS`. CI re-runs `upgrade.sh` to prove the vendored bytes match the pinned release.
