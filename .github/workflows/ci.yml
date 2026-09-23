@@ -1,9 +1,13 @@
+---
 name: CI
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Re-proves the vendored bytes against the upstream release and the build on current runners.
+    - cron: "41 6 * * 2"
 
 permissions:
   contents: read
