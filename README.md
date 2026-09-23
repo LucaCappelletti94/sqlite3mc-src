@@ -17,6 +17,6 @@ assert!(dir.join(sqlite3mc_src::HEADER_FILE).is_file());
 
 The version encodes the release, so `205.1.x` is SQLite3MC 2.5.1. A `205.1` requirement also accepts later 2.5 patch releases, never 2.6. Those may wrap a newer SQLite, named by `SQLITE_VERSION`, so a `-sys` crate with committed bindings regenerates them.
 
-SQLite3MC is MIT licensed, and the amalgamation also carries public-domain code and Argon2 under CC0-1.0 or Apache-2.0.
+SQLite3MC is MIT licensed. The amalgamation also carries public-domain code (SQLite among it), a password-hashing file under CC0-1.0, a block under the Unlicense, and Argon2 under CC0-1.0 or Apache-2.0.
 
 A daily workflow in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src) opens a pull request for each new SQLite3MC release, taking the archive's checksum only from the release's Sigstore-signed `SHA256SUMS`. CI re-runs `upgrade.sh` to prove the vendored bytes match the pinned release.
