@@ -4,17 +4,22 @@ name = "sqlite3mc-src"
 version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
 edition = "2021"
 rust-version = "1.81"
-description = "Untouched SQLite3 Multiple Ciphers amalgamation for -sys crates to compile"
+description = "Untouched SQLite3 Multiple Ciphers amalgamation for Rust -sys crates to build"
 repository = "https://github.com/LucaCappelletti94/sqlite3mc-src"
 license = "MIT AND (CC0-1.0 OR Apache-2.0)"
 keywords = ["sqlite", "sqlite3mc", "encryption", "amalgamation"]
-categories = ["database", "external-ffi-bindings"]
+categories = ["database", "development-tools::build-utils"]
 readme = "README.md"
 include = ["/src", "/sqlite3mc", "/tests", "/README.md", "/LICENSE"]
 
 [lints.rust]
 missing_docs = "forbid"
 unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
