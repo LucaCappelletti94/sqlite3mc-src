@@ -46,6 +46,17 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  scripts:
+    name: Scripts and workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck upgrade.sh bump.sh
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
   compile:
     name: Compile the packaged amalgamation on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
