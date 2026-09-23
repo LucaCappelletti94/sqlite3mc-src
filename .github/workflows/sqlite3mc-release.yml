@@ -65,6 +65,10 @@ jobs:
           cargo +stable test --doc
           cargo +1.81 test --all-targets
           cargo +stable package --allow-dirty
+          dir=$(tar -tzf target/package/sqlite3mc-src-*.crate | head -n 1 | cut -d/ -f1)
+          tar -xzf target/package/sqlite3mc-src-*.crate -C target/package
+          cp -r smoke "target/package/$dir/smoke"
+          cargo +stable run --manifest-path "target/package/$dir/smoke/Cargo.toml"
 
       - if: steps.release.outputs.moved == 'yes'
         env:
@@ -78,7 +82,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add Cargo.toml Cargo.lock upgrade.sh src/lib.rs sqlite3mc
+          git add Cargo.toml Cargo.lock smoke/Cargo.lock upgrade.sh src/lib.rs sqlite3mc
           git commit -m "$title"
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
             git fetch origin "$branch":refs/remotes/origin/"$branch"

@@ -43,6 +43,8 @@ sed -i -E \
     -e "s/^(pub const SQLITE_VERSION: &str = )\".*\";$/\1\"${SQLITE_VERSION}\";/" \
     src/lib.rs
 sed -i -E "0,/^version = \".*\"$/s//version = \"${CRATE_VERSION}\"/" Cargo.toml
+cargo update --quiet -p sqlite3mc-src
+cargo update --quiet --manifest-path smoke/Cargo.toml -p sqlite3mc-src
 
 ./upgrade.sh
 echo "Pinned SQLite3MC ${VERSION} on SQLite ${SQLITE_VERSION} as ${CRATE_VERSION}"

@@ -1,0 +1,13 @@
+[package]
+name = "sqlite3mc-src-smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Compiles and links the vendored amalgamation as a -sys crate would"
+
+[dependencies]
+sqlite3mc-src = { path = ".." }
+
+[build-dependencies]
+cc = "1.2.27"
+sqlite3mc-src = { path = ".." }
