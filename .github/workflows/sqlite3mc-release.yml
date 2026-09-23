@@ -60,6 +60,7 @@ jobs:
           set -euo pipefail
           cargo +stable fmt --check
           cargo +stable clippy --all-targets -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo +stable doc --no-deps
           cargo +stable test --all-targets
           cargo +stable test --doc
           cargo +1.81 test --all-targets

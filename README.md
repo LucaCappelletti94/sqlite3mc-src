@@ -5,7 +5,7 @@
 [![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=LucaCappelletti94_sqlite3mc-src&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=LucaCappelletti94_sqlite3mc-src)
 [![crates.io](https://img.shields.io/crates/v/sqlite3mc-src.svg)](https://crates.io/crates/sqlite3mc-src)
 [![docs.rs](https://docs.rs/sqlite3mc-src/badge.svg)](https://docs.rs/sqlite3mc-src)
-[![license](https://img.shields.io/crates/l/sqlite3mc-src.svg)](LICENSE)
+[![license](https://img.shields.io/crates/l/sqlite3mc-src.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/blob/main/LICENSE)
 
 The [SQLite3 Multiple Ciphers](https://github.com/utelle/SQLite3MultipleCiphers) amalgamation, byte for byte as released, for `-sys` crates to compile with their own options. It compiles nothing and sets no defines, so every consumer keeps its own flags while one `Cargo.lock` gives them all the same source.
 
