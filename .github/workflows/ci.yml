@@ -75,8 +75,9 @@ jobs:
         shell: bash
         run: |
           cargo package
-          dir=$(tar -tzf target/package/sqlite3mc-src-*.crate | head -n 1 | cut -d/ -f1)
-          tar -xzf target/package/sqlite3mc-src-*.crate -C target/package
+          crate=$(echo target/package/sqlite3mc-src-*.crate)
+          dir=$(basename "$crate" .crate)
+          tar -xzf "$crate" -C target/package
           cp -r smoke "target/package/$dir/smoke"
           echo "SMOKE_MANIFEST=target/package/$dir/smoke/Cargo.toml" >> "$GITHUB_ENV"
       - run: cargo run --manifest-path "$SMOKE_MANIFEST"

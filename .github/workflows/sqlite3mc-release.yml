@@ -65,8 +65,9 @@ jobs:
           cargo +stable test --doc
           cargo +1.81 test --all-targets
           cargo +stable package --allow-dirty
-          dir=$(tar -tzf target/package/sqlite3mc-src-*.crate | head -n 1 | cut -d/ -f1)
-          tar -xzf target/package/sqlite3mc-src-*.crate -C target/package
+          crate=$(echo target/package/sqlite3mc-src-*.crate)
+          dir=$(basename "$crate" .crate)
+          tar -xzf "$crate" -C target/package
           cp -r smoke "target/package/$dir/smoke"
           cargo +stable run --manifest-path "target/package/$dir/smoke/Cargo.toml"
 
