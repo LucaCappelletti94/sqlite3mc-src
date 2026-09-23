@@ -1,0 +1,51 @@
+---
+name: Sonar
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sonar:
+    name: SonarQube scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Neither a fork's pull request nor a Dependabot run can read SONAR_TOKEN.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history improves blame-based new-code attribution.
+          fetch-depth: 0
+
+      - name: Install stable toolchain with clippy and llvm-tools
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component clippy \
+            --component llvm-tools-preview
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Test coverage
+        run: cargo +stable llvm-cov --all-targets --lcov --output-path lcov.info
+
+      - name: SonarQube scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

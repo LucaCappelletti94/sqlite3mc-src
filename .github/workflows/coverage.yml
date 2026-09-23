@@ -1,0 +1,48 @@
+---
+name: Coverage
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Neither a fork's pull request nor a Dependabot run can read CODECOV_TOKEN.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable toolchain with llvm-tools
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component llvm-tools-preview
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Test coverage
+        run: cargo +stable llvm-cov --all-targets --codecov --output-path codecov.json
+
+      - uses: codecov/codecov-action@v7
+        with:
+          files: codecov.json
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true

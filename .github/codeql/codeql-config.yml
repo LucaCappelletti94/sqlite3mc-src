@@ -1,0 +1,9 @@
+---
+name: sqlite3mc-src CodeQL configuration
+
+queries:
+  - uses: security-extended
+
+# The vendored amalgamation is upstream C, analysed by its own project.
+paths-ignore:
+  - sqlite3mc
