@@ -1,0 +1,20 @@
+[package]
+name = "sqlite3mc-src"
+# 205 is SQLite3MC 2.5, the middle number its patch release, the last our own republishes.
+version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
+edition = "2021"
+rust-version = "1.81"
+description = "Untouched SQLite3 Multiple Ciphers amalgamation for -sys crates to compile"
+repository = "https://github.com/LucaCappelletti94/sqlite3mc-src"
+license = "MIT AND (CC0-1.0 OR Apache-2.0)"
+keywords = ["sqlite", "sqlite3mc", "encryption", "amalgamation"]
+categories = ["database", "external-ffi-bindings"]
+readme = "README.md"
+include = ["/src", "/sqlite3mc", "/tests", "/README.md", "/LICENSE"]
+
+[lints.rust]
+missing_docs = "forbid"
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
