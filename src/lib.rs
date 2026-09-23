@@ -3,7 +3,7 @@
 use std::path::Path;
 
 /// SQLite3 Multiple Ciphers release the vendored amalgamation comes from.
-pub const SQLITE3MC_VERSION: &str = "2.5.1";
+pub const SQLITE3MC_VERSION: &str = "2.4.0";
 
 /// SQLite release that amalgamation wraps.
 pub const SQLITE_VERSION: &str = "3.53.4";

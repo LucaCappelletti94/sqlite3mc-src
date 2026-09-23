@@ -2,9 +2,9 @@
 
 # Re-vendors the pinned release byte for byte. bump.sh moves the pins.
 
-SQLITE3MC_VERSION="2.5.1"
+SQLITE3MC_VERSION="2.4.0"
 SQLITE_VERSION="3.53.4"
-ARCHIVE_SHA256="4125f8ff275ea953dabb3289331b20a0e76d4fc060f57148f4a5df3bf3b0d5e0"
+ARCHIVE_SHA256="fab0fa8838b670b2b8c392d7294a0ef3c02ce2794d5c06de3eb9a649cfb4b8c2"
 
 cd "$(dirname "$0")"
 ARCHIVE="sqlite3mc-${SQLITE3MC_VERSION}-sqlite-${SQLITE_VERSION}-amalgamation.zip"
