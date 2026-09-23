@@ -28,7 +28,7 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]')
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install stable toolchain with llvm-tools
         run: |
@@ -36,12 +36,14 @@ jobs:
             --profile minimal \
             --component llvm-tools-preview
 
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: cargo-llvm-cov
 
       - name: Test coverage
         run: cargo +stable llvm-cov --all-targets --codecov --output-path codecov.json
 
-      - uses: codecov/codecov-action@v7
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: codecov.json
           token: ${{ secrets.CODECOV_TOKEN }}
