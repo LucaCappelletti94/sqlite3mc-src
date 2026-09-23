@@ -1,6 +1,6 @@
 [package]
 name = "sqlite3mc-src"
-# 205 is SQLite3MC 2.5, the middle number its patch release, the last our own republishes.
+# SQLite3MC X.Y.Z is (100X+Y).Z.n, where n counts our own republishes of that release.
 version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
 edition = "2021"
 rust-version = "1.81"
