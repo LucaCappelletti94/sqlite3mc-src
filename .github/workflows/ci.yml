@@ -49,6 +49,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --manifest-path smoke/Cargo.toml --check
       - run: cargo clippy --manifest-path smoke/Cargo.toml --all-targets -- -D warnings
+      - run: cargo fmt --manifest-path wasm/Cargo.toml --check
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
@@ -88,6 +89,33 @@ jobs:
           echo "SMOKE_MANIFEST=target/package/$dir/smoke/Cargo.toml" >> "$GITHUB_ENV"
       - run: cargo run --manifest-path "$SMOKE_MANIFEST"
         shell: bash
+
+  wasm:
+    name: sqlite-wasm-rs builds the packaged amalgamation for Wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: wasm-pack
+      # A C library function the released sqlite-wasm-rs does not provide fails this link.
+      - name: Package and unpack
+        run: |
+          set -euo pipefail
+          cargo package
+          crate=$(echo target/package/sqlite3mc-src-*.crate)
+          tar -xzf "$crate" -C target/package
+          echo "SQLITE_WASM_RS_SOURCE_DIR=$PWD/target/package/$(basename "$crate" .crate)/sqlite3mc" >> "$GITHUB_ENV"
+      - run: wasm-pack test --node --release
+        working-directory: wasm
+      # sqlite-wasm-rs vendors the same release, so only its build log shows which copy it compiled.
+      - run: grep -rqsF "rerun-if-changed=$SQLITE_WASM_RS_SOURCE_DIR" wasm/target/wasm32-unknown-unknown/release/build
+      - run: cargo clippy --manifest-path wasm/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
 
   release-bytes:
     name: Vendored files match the release

@@ -1,0 +1,14 @@
+[package]
+name = "sqlite3mc-src-wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Builds sqlite-wasm-rs's sqlite3mc feature from the vendored amalgamation and exercises encryption"
+
+[dev-dependencies]
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
+sqlite3mc-src = { path = ".." }
+wasm-bindgen-test = "0.3"
+
+# Standalone, so the root crate never adopts it as a member.
+[workspace]
