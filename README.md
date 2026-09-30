@@ -20,3 +20,5 @@ The version encodes the release, so `205.1.x` is SQLite3MC 2.5.1. A `205.1` requ
 SQLite3MC is MIT licensed. The amalgamation also carries public-domain code (SQLite among it), a password-hashing file under CC0-1.0, a block under the Unlicense, and Argon2 under CC0-1.0 or Apache-2.0.
 
 A daily workflow in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src) opens a pull request for each new SQLite3MC release, taking the archive's checksum only from the release's Sigstore-signed `SHA256SUMS`. CI re-runs `upgrade.sh`, which checks that signature again before trusting the pinned checksum, to prove the vendored bytes match the pinned release. It also compiles the packaged sources natively and through `sqlite-wasm-rs`, and checks that each build opens the other's files in every cipher, under Node and in headless Chrome and Firefox, on OPFS too.
+
+CI also runs SQLite3MC's own tests, a rekey of every cipher and SQLite's TCL suite through the shipped amalgamation, once plainly and once under the address and undefined-behaviour sanitizers, with every expected failure named and explained.
