@@ -10,6 +10,10 @@ name: rusqlite pin
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   fork-head:
     name: CI pins the head of the rusqlite fork's feat/sqlite3mc-src
