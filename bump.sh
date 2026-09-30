@@ -1,25 +1,14 @@
 #!/bin/sh -e
 
-# Moves the vendored SQLite3MC to release VERSION. The archive checksum and the SQLite version
-# come from the release's SHA256SUMS, accepted only with a valid Sigstore signature from
-# SQLite3MC's own release workflow.
+# Moves the vendored SQLite3MC to release VERSION, taking the archive checksum and SQLite version from its signed SHA256SUMS.
 VERSION=${1:?usage: bump.sh VERSION}
 echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a release version: $VERSION" >&2; exit 1; }
 
 cd "$(dirname "$0")"
-RELEASE="https://github.com/utelle/SQLite3MultipleCiphers/releases/download/v${VERSION}"
+. ./sigstore.sh
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-
-for file in SHA256SUMS SHA256SUMS.pem SHA256SUMS.sig; do
-    curl -sfL -o "$WORK/$file" "$RELEASE/sqlite3mc-${VERSION}-$file"
-done
-cosign verify-blob \
-    --certificate "$WORK/SHA256SUMS.pem" \
-    --signature "$WORK/SHA256SUMS.sig" \
-    --certificate-identity-regexp '^https://github\.com/utelle/SQLite3MultipleCiphers/\.github/workflows/[^@]+@refs/heads/main$' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    "$WORK/SHA256SUMS"
+fetch_signed_sums "$VERSION" "$WORK"
 
 ESCAPED=$(echo "$VERSION" | sed 's/\./\\./g')
 LINE=$(grep -E "^[0-9a-f]{64}  sqlite3mc-${ESCAPED}-sqlite-[0-9]+\.[0-9]+\.[0-9]+-amalgamation\.zip$" "$WORK/SHA256SUMS")

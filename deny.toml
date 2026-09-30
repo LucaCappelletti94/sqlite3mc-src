@@ -1,0 +1,22 @@
+# Dependency policy for the unpublished test crates in smoke/ and wasm/, whose dependencies are mostly dev-dependencies.
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+# sqlite3mc-src's own expression needs MIT, CC0-1.0 and the Unlicense, and unicode-ident needs Unicode-3.0.
+allow = ["Apache-2.0", "CC0-1.0", "MIT", "Unicode-3.0", "Unlicense"]
+include-dev = true
+private = { ignore = true }
+# One policy serves both graphs, and smoke/ alone never meets every licence.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "deny"
+multiple-versions-include-dev = true
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

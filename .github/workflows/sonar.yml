@@ -32,6 +32,7 @@ jobs:
         with:
           # Full history improves blame-based new-code attribution.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install stable toolchain with clippy and llvm-tools
         run: |
