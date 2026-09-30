@@ -1,0 +1,49 @@
+---
+name: rusqlite pin
+
+# Weekly and on demand, so the day it goes red blocks neither pushes nor the release workflow.
+"on":
+  schedule:
+    - cron: "17 7 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  fork-head:
+    name: CI pins the head of the rusqlite fork's feat/sqlite3mc-src
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          pin=$(yq '.jobs.rusqlite.env.RUSQLITE_REV' .github/workflows/ci.yml)
+          head=$(git ls-remote https://github.com/LucaCappelletti94/rusqlite.git refs/heads/feat/sqlite3mc-src | cut -f1)
+          if [ "$head" != "$pin" ]; then
+            echo "::error::feat/sqlite3mc-src is at '${head:-deleted}' but ci.yml pins $pin, so move RUSQLITE_REV"
+            exit 1
+          fi
+          echo "feat/sqlite3mc-src is still at the pinned $pin"
+
+  released:
+    name: No released rusqlite offers bundled-sqlite3mc yet
+    runs-on: ubuntu-latest
+    steps:
+      # Goes red once the rusqlite job can build a released coordinate instead of the fork.
+      - run: |
+          set -euo pipefail
+          api=https://crates.io/api/v1/crates/rusqlite
+          latest=$(curl -sfL -A "sqlite3mc-src CI" "$api" | jq -r .crate.max_stable_version)
+          features=$(curl -sfL -A "sqlite3mc-src CI" "$api/$latest" | jq -er '.version.features | keys[]')
+          if grep -qx bundled-sqlite3mc <<< "$features"; then
+            echo "::error::rusqlite $latest has bundled-sqlite3mc, so the rusqlite job can drop the fork pin"
+            exit 1
+          fi
+          echo "rusqlite $latest has no bundled-sqlite3mc, so the fork pin stays"
