@@ -150,6 +150,40 @@ jobs:
       - run: grep -rqsF "rerun-if-changed=$SQLITE_WASM_RS_SOURCE_DIR" wasm/target/wasm32-unknown-unknown/release/build
       - run: cargo clippy --manifest-path wasm/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
 
+  rusqlite:
+    name: rusqlite's SQLite3MC tests pass on these sources
+    runs-on: ubuntu-latest
+    env:
+      # Head of LucaCappelletti94/rusqlite feat/sqlite3mc-src, moved by hand when rusqlite-pin.yml goes red.
+      RUSQLITE_REV: 15c7356af30f42c5938b48217a240e61203eac50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - name: Fetch rusqlite and point its sqlite3mc-src at this checkout
+        run: |
+          set -euo pipefail
+          rusqlite="$RUNNER_TEMP/rusqlite"
+          git init -q "$rusqlite"
+          git -C "$rusqlite" fetch -q --depth 1 https://github.com/LucaCappelletti94/rusqlite.git "$RUSQLITE_REV"
+          git -C "$rusqlite" checkout -q FETCH_HEAD
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          # rusqlite requires one exact release, and a patch whose version misses it is silently dropped.
+          sed -i -E "s/^(sqlite3mc-src = \{ version = \")=[^\"]+\"/\1=${version%%+*}\"/" "$rusqlite/libsqlite3-sys/Cargo.toml"
+          printf '\n[patch.crates-io]\nsqlite3mc-src = { path = "%s" }\n' "$PWD" >> "$rusqlite/Cargo.toml"
+          echo "RUSQLITE_DIR=$rusqlite" >> "$GITHUB_ENV"
+      - run: cargo test --features bundled-sqlite3mc --workspace --all-targets
+        working-directory: ${{ env.RUSQLITE_DIR }}
+      - run: cargo test --features "modern-full bundled-sqlite3mc" --workspace --all-targets
+        working-directory: ${{ env.RUSQLITE_DIR }}
+      - run: cargo test --features "modern-full bundled-sqlite3mc" --workspace --doc
+        working-directory: ${{ env.RUSQLITE_DIR }}
+      - run: cargo test --features "modern-full bundled-sqlite3mc session buildtime_bindgen preupdate_hook" --workspace --all-targets
+        working-directory: ${{ env.RUSQLITE_DIR }}
+      # The crates.io release carries the same bytes until a bump, so only the build log shows which copy was compiled.
+      - run: grep -rqsF "rerun-if-changed=$GITHUB_WORKSPACE/sqlite3mc/" "$RUSQLITE_DIR/target/debug/build"
+
   release-bytes:
     name: Vendored files match the release
     runs-on: ubuntu-latest
