@@ -65,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck -x upgrade.sh bump.sh sigstore.sh
+      - run: shellcheck -x upgrade.sh bump.sh sigstore.sh interop.sh
       - name: actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash) 1.7.12
@@ -121,8 +121,8 @@ jobs:
       - run: cargo run --manifest-path "$SMOKE_MANIFEST"
         shell: bash
 
-  wasm:
-    name: sqlite-wasm-rs builds the packaged amalgamation for Wasm
+  interop:
+    name: Native and Wasm SQLite3MC open each other's files
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,19 +136,44 @@ jobs:
       - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
         with:
           tool: wasm-pack
-      # A C library function the released sqlite-wasm-rs does not provide fails this link.
+      # Both sides compile the unpacked .crate, and a C library function the released sqlite-wasm-rs does not provide fails the Wasm link.
       - name: Package and unpack
         run: |
           set -euo pipefail
           cargo package
           crate=$(echo target/package/sqlite3mc-src-*.crate)
+          dir="$PWD/target/package/$(basename "$crate" .crate)"
           tar -xzf "$crate" -C target/package
-          echo "SQLITE_WASM_RS_SOURCE_DIR=$PWD/target/package/$(basename "$crate" .crate)/sqlite3mc" >> "$GITHUB_ENV"
-      - run: wasm-pack test --node --release
-        working-directory: wasm
+          cp -r smoke "$dir/smoke"
+          echo "PACKAGE_DIR=$dir" >> "$GITHUB_ENV"
+      - run: ./interop.sh node
+        env:
+          INTEROP_CRATE: ${{ env.PACKAGE_DIR }}
+          WASM_BINDGEN_TEST_TIMEOUT: "300"
       # sqlite-wasm-rs vendors the same release, so only its build log shows which copy it compiled.
-      - run: grep -rqsF "rerun-if-changed=$SQLITE_WASM_RS_SOURCE_DIR" wasm/target/wasm32-unknown-unknown/release/build
+      - run: grep -rqsF "rerun-if-changed=$PACKAGE_DIR/sqlite3mc" wasm/target/wasm32-unknown-unknown/release/build
       - run: cargo clippy --manifest-path wasm/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
+        env:
+          SQLITE_WASM_RS_SOURCE_DIR: ${{ env.PACKAGE_DIR }}/sqlite3mc
+
+  browsers:
+    name: Wasm SQLite3MC in Chrome and Firefox opens native files and writes files native opens, on OPFS too
+    runs-on: ubuntu-latest
+    env:
+      WASM_BINDGEN_TEST_TIMEOUT: "300"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: wasm-pack
+      - run: ./interop.sh chrome
+      - run: ./interop.sh firefox
 
   rusqlite:
     name: rusqlite's SQLite3MC tests pass on these sources

@@ -4,6 +4,7 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 description = "Compiles and links the vendored amalgamation as a -sys crate would"
+default-run = "sqlite3mc-src-smoke"
 
 [dependencies]
 sqlite3mc-src = { path = ".." }
