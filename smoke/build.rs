@@ -1,3 +1,5 @@
+//! Compiles the vendored amalgamation for the native smoke binaries.
+
 fn main() {
     let source = sqlite3mc_src::source_dir().join(sqlite3mc_src::SOURCE_FILE);
     println!("cargo:rerun-if-changed={}", source.display());
