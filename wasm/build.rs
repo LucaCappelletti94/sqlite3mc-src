@@ -19,9 +19,15 @@ fn main() {
         })
         .collect();
     files.sort();
-    let mut table = String::from("pub const NATIVE_FILES: &[(&str, &[u8])] = &[\n");
+    let mut table = String::from(
+        "/// Native encrypted fixtures embedded for interop.\npub const NATIVE_FILES: &[(&str, &[u8])] = &[\n",
+    );
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        #[expect(
+            clippy::unnecessary_debug_formatting,
+            reason = "Debug formatting emits a quoted and escaped Rust path literal"
+        )]
         writeln!(
             table,
             "({name:?}, include_bytes!({:?})),",

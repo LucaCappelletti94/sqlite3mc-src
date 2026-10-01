@@ -14,5 +14,20 @@ sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 sqlite3mc-src = { path = ".." }
 wasm-bindgen-test = "0.3"
 
+[lints.rust]
+missing_docs = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+unused_unsafe = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
 # Standalone, so the root crate never adopts it as a member.
 [workspace]
