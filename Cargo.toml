@@ -19,7 +19,17 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 unreachable_pub = "warn"
 
 [lints.clippy]
+all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
-allow_attributes_without_reason = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+cfg_not_test = "deny"
+dbg_macro = "deny"
+large_include_file = "deny"
+let_underscore_must_use = "deny"
+todo = "deny"
+unimplemented = "deny"
+unused_result_ok = "deny"
+unwrap_used = "deny"

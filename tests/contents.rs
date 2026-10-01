@@ -46,13 +46,14 @@ fn header_carries_the_declared_sqlite_version() {
 
 #[test]
 fn crate_version_encodes_the_release() {
-    let mut parts = SQLITE3MC_VERSION
-        .split('.')
-        .map(|part| part.parse::<u64>().unwrap());
+    let mut parts = SQLITE3MC_VERSION.split('.').map(|part| {
+        part.parse::<u64>()
+            .expect("version component is an integer")
+    });
     let (major, minor, patch) = (
-        parts.next().unwrap(),
-        parts.next().unwrap(),
-        parts.next().unwrap(),
+        parts.next().expect("version has a major component"),
+        parts.next().expect("version has a minor component"),
+        parts.next().expect("version has a patch component"),
     );
     let (numbers, metadata) = env!("CARGO_PKG_VERSION")
         .split_once('+')
