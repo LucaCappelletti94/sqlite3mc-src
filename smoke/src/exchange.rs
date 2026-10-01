@@ -44,8 +44,9 @@ impl Db {
         let mut handle = std::ptr::null_mut();
         let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE;
         // `c_name` outlives the call, and SQLite copies it.
-        let rc =
-            unsafe { ffi::sqlite3_open_v2(c_name.as_ptr(), &mut handle, flags, std::ptr::null()) };
+        let rc = unsafe {
+            ffi::sqlite3_open_v2(c_name.as_ptr(), &raw mut handle, flags, std::ptr::null())
+        };
         let db = Self(handle, name.to_owned());
         assert_eq!(rc, ffi::SQLITE_OK, "{name}: {}", db.error());
         for pragma in pragmas {
@@ -80,7 +81,13 @@ impl Db {
         let mut stmt = std::ptr::null_mut();
         // `c_sql` outlives the call, which reads it up to its NUL.
         let rc = unsafe {
-            ffi::sqlite3_prepare_v2(self.0, c_sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut())
+            ffi::sqlite3_prepare_v2(
+                self.0,
+                c_sql.as_ptr(),
+                -1,
+                &raw mut stmt,
+                std::ptr::null_mut(),
+            )
         };
         assert_eq!(rc, ffi::SQLITE_OK, "{}: {sql}: {}", self.1, self.error());
         // `stmt` was just prepared, and the text is copied before it is finalized.

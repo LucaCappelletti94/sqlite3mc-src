@@ -1,53 +1,65 @@
 //! `write DIR` creates `native-<cipher>.db` for every cipher, `read DIR PREFIX` checks the `PREFIX-<cipher>.db` Wasm wrote.
 
+#[expect(
+    unreachable_pub,
+    reason = "The Wasm crate exports this shared module to its integration tests"
+)]
 #[path = "../exchange.rs"]
 mod exchange;
 
 #[expect(
-    non_camel_case_types,
-    reason = "SQLite's C names, as sqlite-wasm-rs spells them"
+    clippy::redundant_pub_crate,
+    reason = "Restricted FFI visibility satisfies `unreachable_pub` in this binary"
 )]
 mod ffi {
     use std::ffi::{c_char, c_int, c_uchar, c_void};
 
-    pub enum sqlite3 {}
-    pub enum sqlite3_stmt {}
+    #[repr(C)]
+    pub(super) struct sqlite3 {
+        _private: [u8; 0],
+    }
 
-    pub const SQLITE_OK: c_int = 0;
-    pub const SQLITE_NOTADB: c_int = 26;
-    pub const SQLITE_ROW: c_int = 100;
-    pub const SQLITE_OPEN_READWRITE: c_int = 2;
-    pub const SQLITE_OPEN_CREATE: c_int = 4;
+    #[repr(C)]
+    pub(super) struct sqlite3_stmt {
+        _private: [u8; 0],
+    }
+
+    pub(super) const SQLITE_OK: c_int = 0;
+    pub(super) const SQLITE_NOTADB: c_int = 26;
+    pub(super) const SQLITE_ROW: c_int = 100;
+    pub(super) const SQLITE_OPEN_READWRITE: c_int = 2;
+    pub(super) const SQLITE_OPEN_CREATE: c_int = 4;
 
     type ExecCallback =
         unsafe extern "C" fn(*mut c_void, c_int, *mut *mut c_char, *mut *mut c_char) -> c_int;
 
     unsafe extern "C" {
-        pub fn sqlite3_open_v2(
+        pub(super) fn sqlite3_open_v2(
             filename: *const c_char,
             db: *mut *mut sqlite3,
             flags: c_int,
             vfs: *const c_char,
         ) -> c_int;
-        pub fn sqlite3_close(db: *mut sqlite3) -> c_int;
-        pub fn sqlite3_exec(
+        pub(super) fn sqlite3_close(db: *mut sqlite3) -> c_int;
+        pub(super) fn sqlite3_exec(
             db: *mut sqlite3,
             sql: *const c_char,
             callback: Option<ExecCallback>,
             arg: *mut c_void,
             errmsg: *mut *mut c_char,
         ) -> c_int;
-        pub fn sqlite3_prepare_v2(
+        pub(super) fn sqlite3_prepare_v2(
             db: *mut sqlite3,
             sql: *const c_char,
             bytes: c_int,
             stmt: *mut *mut sqlite3_stmt,
             tail: *mut *const c_char,
         ) -> c_int;
-        pub fn sqlite3_step(stmt: *mut sqlite3_stmt) -> c_int;
-        pub fn sqlite3_column_text(stmt: *mut sqlite3_stmt, column: c_int) -> *const c_uchar;
-        pub fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> c_int;
-        pub fn sqlite3_errmsg(db: *mut sqlite3) -> *const c_char;
+        pub(super) fn sqlite3_step(stmt: *mut sqlite3_stmt) -> c_int;
+        pub(super) fn sqlite3_column_text(stmt: *mut sqlite3_stmt, column: c_int)
+            -> *const c_uchar;
+        pub(super) fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> c_int;
+        pub(super) fn sqlite3_errmsg(db: *mut sqlite3) -> *const c_char;
     }
 }
 
