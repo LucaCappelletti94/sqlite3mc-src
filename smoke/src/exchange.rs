@@ -43,9 +43,14 @@ impl Db {
         let c_name = CString::new(name).unwrap();
         let mut handle = std::ptr::null_mut();
         let flags = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE;
-        // `c_name` outlives the call, and SQLite copies it.
+        // SAFETY: `c_name` is live and NUL-terminated, and `handle` is writable for the call.
         let rc = unsafe {
-            ffi::sqlite3_open_v2(c_name.as_ptr(), &raw mut handle, flags, std::ptr::null())
+            ffi::sqlite3_open_v2(
+                c_name.as_ptr(),
+                std::ptr::addr_of_mut!(handle),
+                flags,
+                std::ptr::null(),
+            )
         };
         let db = Self(handle, name.to_owned());
         assert_eq!(rc, ffi::SQLITE_OK, "{name}: {}", db.error());
@@ -79,13 +84,13 @@ impl Db {
     pub fn text(&self, sql: &str) -> String {
         let c_sql = CString::new(sql).unwrap();
         let mut stmt = std::ptr::null_mut();
-        // `c_sql` outlives the call, which reads it up to its NUL.
+        // SAFETY: The connection is live, `c_sql` is NUL-terminated, and `stmt` is writable for the call.
         let rc = unsafe {
             ffi::sqlite3_prepare_v2(
                 self.0,
                 c_sql.as_ptr(),
                 -1,
-                &raw mut stmt,
+                std::ptr::addr_of_mut!(stmt),
                 std::ptr::null_mut(),
             )
         };
