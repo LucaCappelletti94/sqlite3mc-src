@@ -34,6 +34,7 @@ sed -i -E \
 sed -i -E "0,/^version = \".*\"$/s//version = \"${CRATE_VERSION}\"/" Cargo.toml
 cargo update --quiet -p sqlite3mc-src
 cargo update --quiet --manifest-path smoke/Cargo.toml -p sqlite3mc-src
+cargo update --quiet --manifest-path fuzz/Cargo.toml -p sqlite3mc-src
 
 ./upgrade.sh
 echo "Pinned SQLite3MC ${VERSION} on SQLite ${SQLITE_VERSION} as ${CRATE_VERSION}"

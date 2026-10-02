@@ -54,9 +54,22 @@ jobs:
       - run: cargo fmt --manifest-path smoke/Cargo.toml --check
       - run: cargo clippy --manifest-path smoke/Cargo.toml --all-targets -- -D warnings
       - run: cargo fmt --manifest-path wasm/Cargo.toml --check
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  # The fuzz crate is its own workspace, so no other job runs its tests.
+  fuzz:
+    name: Fuzz corpus agrees with SQLCipher
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - run: cargo test --manifest-path fuzz/Cargo.toml
 
   scripts:
     name: Scripts and workflows
@@ -65,7 +78,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck -x upgrade.sh bump.sh sigstore.sh interop.sh suite/run.sh
+      - run: shellcheck -x upgrade.sh bump.sh sigstore.sh interop.sh suite/run.sh .clusterfuzzlite/build.sh
       - name: actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash) 1.7.12

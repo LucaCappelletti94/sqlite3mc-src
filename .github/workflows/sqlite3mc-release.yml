@@ -104,7 +104,7 @@ jobs:
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git checkout -b "$branch"
-          git add Cargo.toml Cargo.lock smoke/Cargo.lock upgrade.sh src/lib.rs sqlite3mc
+          git add Cargo.toml Cargo.lock smoke/Cargo.lock fuzz/Cargo.lock upgrade.sh src/lib.rs sqlite3mc
           git commit -m "$title"
           # An unchanged push would only rerun every check, so the branch moves only when its
           # content changed or main moved under it.

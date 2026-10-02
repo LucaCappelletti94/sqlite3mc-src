@@ -1,0 +1,35 @@
+name: ClusterFuzzLite batch fuzzing
+
+"on":
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    name: Fuzz main for an hour
+    runs-on: ubuntu-latest
+    # The corpus lives on the clusterfuzzlite branch of this repository.
+    permissions:
+      contents: write
+    steps:
+      - name: Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 3600
+          mode: batch
+          sanitizer: address
+          storage-repo: ${{ github.server_url }}/${{ github.repository }}.git
+          storage-repo-branch: clusterfuzzlite

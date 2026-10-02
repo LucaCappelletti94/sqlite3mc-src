@@ -1,0 +1,38 @@
+[package]
+name = "sqlite3mc-src-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Differential fuzzing of SQLite3MC's sqlcipher scheme against SQLCipher"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = "0.4.13"
+
+[build-dependencies]
+cc = "1.5.1"
+sqlcipher-src = "419"
+sqlite3mc-src = { path = ".." }
+
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+# The crate's table, minus unsafe_code (FFI) and missing_docs and cargo (never published).
+[lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+
+# Standalone, so the root crate never adopts it as a member.
+[workspace]

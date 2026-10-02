@@ -1,1 +1,1 @@
-doc-valid-idents = ["SQLite3", "SQLite3MC", ".."]
+doc-valid-idents = ["SQLite3", "SQLite3MC", "SQLCipher", ".."]
