@@ -34,6 +34,7 @@ pub(crate) struct Api {
         unsafe extern "C" fn(*const c_char, *mut *mut Sqlite3, c_int, *const c_char) -> c_int,
     pub(crate) close_v2: unsafe extern "C" fn(*mut Sqlite3) -> c_int,
     pub(crate) key: unsafe extern "C" fn(*mut Sqlite3, *const c_void, c_int) -> c_int,
+    pub(crate) rekey: unsafe extern "C" fn(*mut Sqlite3, *const c_void, c_int) -> c_int,
     pub(crate) prepare_v2: unsafe extern "C" fn(
         *mut Sqlite3,
         *const c_char,
@@ -91,6 +92,7 @@ macro_rules! common {
             sqlite3_open_v2(*const c_char, *mut *mut Sqlite3, c_int, *const c_char) -> c_int;
             sqlite3_close_v2(*mut Sqlite3) -> c_int;
             sqlite3_key(*mut Sqlite3, *const c_void, c_int) -> c_int;
+            sqlite3_rekey(*mut Sqlite3, *const c_void, c_int) -> c_int;
             sqlite3_prepare_v2(*mut Sqlite3, *const c_char, c_int, *mut *mut Stmt, *mut *const c_char) -> c_int;
             sqlite3_step(*mut Stmt) -> c_int;
             sqlite3_reset(*mut Stmt) -> c_int;
@@ -128,6 +130,7 @@ macro_rules! api {
             open_v2: $module::sqlite3_open_v2,
             close_v2: $module::sqlite3_close_v2,
             key: $module::sqlite3_key,
+            rekey: $module::sqlite3_rekey,
             prepare_v2: $module::sqlite3_prepare_v2,
             step: $module::sqlite3_step,
             reset: $module::sqlite3_reset,

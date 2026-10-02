@@ -89,6 +89,14 @@ impl<'a> Connection<'a> {
         check(unsafe { (self.api.key)(self.db.as_ptr(), key.as_ptr().cast(), len) })
     }
 
+    /// Changes the key an already-open connection uses, empty bytes decrypting the database.
+    pub(crate) fn rekey(&self, key: &[u8]) -> Result<(), Code> {
+        let len = c_int::try_from(key.len()).expect("keys are short");
+        // SAFETY: `self.db` is open, and `key` is valid for `len` bytes, which SQLite copies
+        // before returning.
+        check(unsafe { (self.api.rekey)(self.db.as_ptr(), key.as_ptr().cast(), len) })
+    }
+
     const fn sqlite3mc(&self) -> &crate::ffi::Sqlite3mcApi {
         self.api
             .sqlite3mc

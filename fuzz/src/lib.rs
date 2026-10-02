@@ -1,5 +1,5 @@
-//! Fuzzing SQLite3MC against SQLCipher differentially, and its own native ciphers for
-//! self-consistency, on the same SQLite.
+//! Fuzzing SQLite3MC against SQLCipher differentially, its own native ciphers for
+//! self-consistency, and its rekey support, on the same SQLite.
 
 #![expect(
     clippy::redundant_pub_crate,
@@ -15,6 +15,6 @@ mod run;
 pub use db::{Code, Value};
 pub use input::{
     Algorithm, Case, Cell, Cipher, Column, Config, Flip, Key, NativeCase, NativeConfig, NativeKey,
-    Op, Side, Table, MAX_FLIPS, MAX_OPS,
+    Op, RekeyAction, RekeyCase, Side, Table, MAX_FLIPS, MAX_OPS,
 };
-pub use run::{run, run_native};
+pub use run::{run, run_native, run_rekey};

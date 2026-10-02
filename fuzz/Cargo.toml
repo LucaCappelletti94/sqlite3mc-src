@@ -3,7 +3,7 @@ name = "sqlite3mc-src-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Fuzzing SQLite3MC against SQLCipher differentially, and its own native ciphers for self-consistency"
+description = "Fuzzing SQLite3MC against SQLCipher differentially, its own native ciphers for self-consistency, and its rekey support"
 
 [package.metadata]
 cargo-fuzz = true
@@ -27,6 +27,13 @@ bench = false
 [[bin]]
 name = "native"
 path = "fuzz_targets/native.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rekey"
+path = "fuzz_targets/rekey.rs"
 test = false
 doc = false
 bench = false

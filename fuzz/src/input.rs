@@ -447,6 +447,23 @@ impl NativeKey {
             kdf_iter: u.int_in_range(1..=16)?,
         })
     }
+
+    /// Draws a key valid for `cipher`: a raw key, with or without an embedded salt, only when
+    /// [`Cipher::supports_raw_key`] allows it, a passphrase otherwise.
+    fn arbitrary_for(u: &mut Unstructured<'_>, cipher: Cipher) -> Result<Self> {
+        if cipher.supports_raw_key() {
+            match u.int_in_range(0..=2)? {
+                0 => Ok(Self::Raw(u.arbitrary()?)),
+                1 => Ok(Self::RawWithSalt {
+                    key: u.arbitrary()?,
+                    salt: u.arbitrary()?,
+                }),
+                _ => Self::arbitrary_passphrase(u),
+            }
+        } else {
+            Self::arbitrary_passphrase(u)
+        }
+    }
 }
 
 impl<'a> Arbitrary<'a> for NativeKey {
@@ -490,18 +507,7 @@ impl<'a> Arbitrary<'a> for NativeConfig {
             None
         };
         let aegis_algorithm_256 = matches!(cipher, Cipher::Aegis) && u.arbitrary()?;
-        let key = if cipher.supports_raw_key() {
-            match u.int_in_range(0..=2)? {
-                0 => NativeKey::Raw(u.arbitrary()?),
-                1 => NativeKey::RawWithSalt {
-                    key: u.arbitrary()?,
-                    salt: u.arbitrary()?,
-                },
-                _ => NativeKey::arbitrary_passphrase(u)?,
-            }
-        } else {
-            NativeKey::arbitrary_passphrase(u)?
-        };
+        let key = NativeKey::arbitrary_for(u, cipher)?;
         let plaintext_header_size =
             if cipher.has_plaintext_header() && matches!(key, NativeKey::RawWithSalt { .. }) {
                 Some(16 * u.int_in_range(0..=6)?)
@@ -531,4 +537,54 @@ pub struct NativeCase {
     pub damage: Vec<Flip>,
     /// A key to reopen with after the workload, almost certainly not the one that wrote it.
     pub wrong_key: NativeKey,
+}
+
+/// What `PRAGMA rekey` does in one execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RekeyAction {
+    /// Rekey to a new key, the same cipher scheme throughout.
+    ChangeKey(NativeKey),
+    /// Rekey to no key at all, decrypting the database in place.
+    Decrypt,
+}
+
+/// One rekey execution: write under the original key, rekey on the same connection, write more,
+/// then round-trip under the result and confirm the original key no longer reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RekeyCase {
+    /// The cipher and original key.
+    pub config: NativeConfig,
+    /// Workload under the original key, at most [`MAX_OPS`] steps of it.
+    pub ops_before: Vec<Op>,
+    /// What rekey does.
+    pub action: RekeyAction,
+    /// Workload continuing on the same connection after rekey, at most [`MAX_OPS`] steps of it.
+    pub ops_after: Vec<Op>,
+}
+
+impl<'a> Arbitrary<'a> for RekeyCase {
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        let config: NativeConfig = u.arbitrary()?;
+        let ops_before = u.arbitrary()?;
+        let action = if u.arbitrary()? {
+            RekeyAction::Decrypt
+        } else if config.plaintext_header_size.is_some() {
+            // A plaintext header needs the new key's salt supplied explicitly too, for the same
+            // reason the original key needs it: see `NativeConfig::plaintext_header_size`'s own
+            // doc comment. Rekey keeps whatever plaintext header size was already configured.
+            RekeyAction::ChangeKey(NativeKey::RawWithSalt {
+                key: u.arbitrary()?,
+                salt: u.arbitrary()?,
+            })
+        } else {
+            RekeyAction::ChangeKey(NativeKey::arbitrary_for(u, config.cipher)?)
+        };
+        let ops_after = u.arbitrary()?;
+        Ok(Self {
+            config,
+            ops_before,
+            action,
+            ops_after,
+        })
+    }
 }

@@ -17,7 +17,7 @@ use crate::{
     },
     input::{
         Algorithm, Case, Cell, Cipher, Column, Config, Key, NativeCase, NativeConfig, NativeKey,
-        Op, Side, Table, MAX_FLIPS, MAX_OPS,
+        Op, RekeyAction, RekeyCase, Side, Table, MAX_FLIPS, MAX_OPS,
     },
 };
 
@@ -246,6 +246,103 @@ pub fn run_native(case: &NativeCase) {
 /// Everything SQLite3MC can read back from `path` with `config`'s key, up to the first failure.
 fn dump_native(path: &Path, config: &NativeConfig) -> Vec<Record> {
     dump(&SQLITE3MC, path, |c| configure_native(c, config))
+}
+
+/// Runs `case` against SQLite3MC's rekey support.
+///
+/// Writes under the original key, rekeys on the same connection, writes more, then round-trips
+/// under the result and confirms the original key no longer reads it (`ChangeKey`; `Decrypt`'s
+/// own result needs no such check, there being no key left to compare against).
+///
+/// # Panics
+///
+/// When SQLite3MC refuses a setting, a step, or the rekey itself that the harness generates as
+/// valid, or an oracle fails.
+pub fn run_rekey(case: &RekeyCase) {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+
+    let dir = WORKDIR.as_path();
+    let clean = dir.join("rekey.db");
+    remove(&clean);
+
+    let cipher = case.config.cipher;
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(&clean),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} database: {code:?}",
+            cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, &case.config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} database: {code:?}",
+            cipher.name()
+        );
+    }
+    run_workload(&connection, "SQLite3MC", &case.ops_before, case);
+
+    let key_len = cipher.key_len(case.config.aegis_algorithm_256);
+    let new_key_bytes = match &case.action {
+        RekeyAction::ChangeKey(key) => native_key_bytes(key, key_len),
+        RekeyAction::Decrypt => Vec::new(),
+    };
+    if let Err(code) = connection.rekey(&new_key_bytes) {
+        panic!(
+            "SQLite3MC refused to rekey a {} database: {code:?} for {case:#?}",
+            cipher.name()
+        );
+    }
+
+    run_workload(&connection, "SQLite3MC (post-rekey)", &case.ops_after, case);
+    drop(connection);
+
+    let after_config = match &case.action {
+        RekeyAction::ChangeKey(key) => {
+            let mut config = case.config.clone();
+            config.key = key.clone();
+            Some(config)
+        }
+        RekeyAction::Decrypt => None,
+    };
+    let own = after_config.as_ref().map_or_else(
+        || dump(&SQLITE3MC, &clean, |_| Ok(())),
+        |config| dump_native(&clean, config),
+    );
+    assert!(
+        clean_read(&own),
+        "SQLite3MC cannot read back its own rekeyed {} file for {case:#?}: {}",
+        cipher.name(),
+        describe(own.iter().rev().take(3)),
+    );
+
+    // An empty database reads back as just the `ok` integrity check for any key, correct or not
+    // (see run_native's own identical guard), and a pre-rekey key equivalent to the new one
+    // proves nothing either.
+    if let RekeyAction::ChangeKey(new_key) = &case.action {
+        if !native_keys_equivalent(&case.config.key, new_key, cipher, key_len) && own.len() > 1 {
+            let old = dump_native(&clean, &case.config);
+            assert_ne!(
+                old,
+                own,
+                "SQLite3MC's pre-rekey key still read back the rekeyed {} content for {case:#?}: {}",
+                cipher.name(),
+                describe(old.iter().rev().take(3)),
+            );
+        }
+    }
+
+    remove(&clean);
 }
 
 const fn api(side: Side) -> &'static Api {
