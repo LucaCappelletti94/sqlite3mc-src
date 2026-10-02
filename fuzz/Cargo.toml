@@ -3,7 +3,7 @@ name = "sqlite3mc-src-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Differential fuzzing of SQLite3MC's sqlcipher scheme against SQLCipher"
+description = "Fuzzing SQLite3MC against SQLCipher differentially, and its own native ciphers for self-consistency"
 
 [package.metadata]
 cargo-fuzz = true
@@ -20,6 +20,13 @@ sqlite3mc-src = { path = ".." }
 [[bin]]
 name = "differential"
 path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "native"
+path = "fuzz_targets/native.rs"
 test = false
 doc = false
 bench = false

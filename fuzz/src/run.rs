@@ -15,7 +15,10 @@ use crate::{
     ffi::{
         Api, SQLCIPHER, SQLITE3MC, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE,
     },
-    input::{Algorithm, Case, Cell, Column, Config, Key, Op, Side, Table},
+    input::{
+        Algorithm, Case, Cell, Cipher, Column, Config, Key, NativeCase, NativeConfig, NativeKey,
+        Op, Side, Table, MAX_FLIPS, MAX_OPS,
+    },
 };
 
 /// One observation of a dump. Two sides reading the same bytes must log the same records.
@@ -30,6 +33,10 @@ enum Record {
 }
 
 const TABLE_NAMES: [&str; 3] = ["t0", "t1", "t2"];
+
+/// `CIPHER_PAGE1_OFFSET` in `sqlite3mc_amalgamation.c`: how many bytes at the start of page 1
+/// every native scheme leaves outside its AEAD coverage, independent of `plaintext_header_size`.
+const CIPHER_PAGE1_OFFSET: usize = 24;
 
 /// Runs `case`, panicking when the libraries disagree or the writer cannot read its own file.
 ///
@@ -62,14 +69,9 @@ pub fn run(case: &Case) {
     };
     write(writer, &clean, case);
 
-    let own = dump(writer, &clean, &case.config);
+    let own = dump(api(writer), &clean, |c| configure(c, writer, &case.config));
     assert!(
-        !own.iter().any(|r| matches!(r, Record::Failed(..)))
-            && own.last()
-                == Some(&Record::Row(
-                    "integrity_check",
-                    vec![Value::Text(b"ok".to_vec())]
-                )),
+        clean_read(&own),
         "{} cannot read back its own file for {case:#?}: {}",
         name(writer),
         describe(own.iter().rev().take(3)),
@@ -80,11 +82,11 @@ pub fn run(case: &Case) {
         writer,
         &own,
         reader,
-        &dump(reader, &clean, &case.config),
+        &dump(api(reader), &clean, |c| configure(c, reader, &case.config)),
     );
 
     let mut bytes = fs::read(&clean).expect("the clean file exists");
-    let flips = &case.damage[..case.damage.len().min(Case::MAX_FLIPS)];
+    let flips = &case.damage[..case.damage.len().min(MAX_FLIPS)];
     if !bytes.is_empty() && !flips.is_empty() {
         let len = u64::try_from(bytes.len()).expect("file length fits u64");
         for flip in flips {
@@ -97,8 +99,12 @@ pub fn run(case: &Case) {
             bytes[offset] ^= flip.mask;
         }
         fs::write(&damaged, &bytes).expect("the work directory is writable");
-        let by_writer = dump(writer, &damaged, &case.config);
-        let by_reader = dump(reader, &damaged, &case.config);
+        let by_writer = dump(api(writer), &damaged, |c| {
+            configure(c, writer, &case.config)
+        });
+        let by_reader = dump(api(reader), &damaged, |c| {
+            configure(c, reader, &case.config)
+        });
         compare(
             case,
             "the damaged file",
@@ -111,6 +117,135 @@ pub fn run(case: &Case) {
 
     remove(&clean);
     remove(&damaged);
+}
+
+/// Whether `log` is a full, successful dump: no failed step, ending in an `ok` integrity check.
+fn clean_read(log: &[Record]) -> bool {
+    !log.iter().any(|r| matches!(r, Record::Failed(..)))
+        && log.last()
+            == Some(&Record::Row(
+                "integrity_check",
+                vec![Value::Text(b"ok".to_vec())],
+            ))
+}
+
+/// Runs `case` against one of SQLite3MC's native cipher schemes.
+///
+/// Panics on a failed round-trip, a wrong key that still reads back the right content, or, for a
+/// scheme that authenticates its pages, damage that scheme failed to catch.
+///
+/// # Panics
+///
+/// When SQLite3MC refuses a setting or step the harness generates as valid, or an oracle fails.
+pub fn run_native(case: &NativeCase) {
+    // SQLCipher is compiled with no-op mutexes, and every execution reuses one directory; the
+    // native target never touches SQLCipher, but shares the directory and its serialization.
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+
+    let dir = WORKDIR.as_path();
+    let clean = dir.join("native-clean.db");
+    let damaged = dir.join("native-damaged.db");
+    remove(&clean);
+    remove(&damaged);
+
+    let cipher = case.config.cipher;
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(&clean),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} database: {code:?}",
+            cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, &case.config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} database: {code:?}",
+            cipher.name()
+        );
+    }
+    run_workload(&connection, "SQLite3MC", &case.ops, case);
+    drop(connection);
+
+    let own = dump_native(&clean, &case.config);
+    assert!(
+        clean_read(&own),
+        "SQLite3MC cannot read back its own {} file for {case:#?}: {}",
+        cipher.name(),
+        describe(own.iter().rev().take(3)),
+    );
+
+    // An empty database (no table ever created) reads back as just the `ok` integrity check for
+    // any key, correct or not, so the wrong key can only be judged once there is real content. A
+    // wrong key equivalent to the real one (same material, or a `kdf_iter` the cipher ignores)
+    // proves nothing either.
+    let key_len = cipher.key_len(case.config.aegis_algorithm_256);
+    if !native_keys_equivalent(&case.wrong_key, &case.config.key, cipher, key_len) && own.len() > 1
+    {
+        let mut wrong_config = case.config.clone();
+        wrong_config.key = case.wrong_key.clone();
+        let wrong = dump_native(&clean, &wrong_config);
+        assert_ne!(
+            wrong,
+            own,
+            "SQLite3MC's wrong key read back the same {} content for {case:#?}: {}",
+            cipher.name(),
+            describe(wrong.iter().rev().take(3)),
+        );
+    }
+
+    if cipher.authenticated() {
+        let original = fs::read(&clean).expect("the clean file exists");
+        let mut bytes = original.clone();
+        let flips = &case.damage[..case.damage.len().min(MAX_FLIPS)];
+        // Page 1's unauthenticated prefix (the stored salt, then the SQLite header bytes an
+        // unencrypted reader still needs) is CIPHER_PAGE1_OFFSET by default, or the whole
+        // configured plaintext header when that is larger, for every native scheme regardless
+        // (the same "bytes 16 through 23 usually not encrypted" limitation the project's own
+        // docs state); tampering it is never expected to be caught.
+        let unauthenticated =
+            usize::from(case.config.plaintext_header_size.unwrap_or(0)).max(CIPHER_PAGE1_OFFSET);
+        if !bytes.is_empty() && !flips.is_empty() {
+            let len = u64::try_from(bytes.len()).expect("file length fits u64");
+            for flip in flips {
+                let offset = usize::try_from(u64::from(flip.offset) % len)
+                    .expect("offset is below the length");
+                if offset < unauthenticated {
+                    continue;
+                }
+                bytes[offset] ^= flip.mask;
+            }
+            // A flip whose mask is 0, whose only set bits already matched, or that landed in the
+            // unauthenticated region above and was skipped, changes nothing.
+            if bytes != original {
+                fs::write(&damaged, &bytes).expect("the work directory is writable");
+                let tampered = dump_native(&damaged, &case.config);
+                assert!(
+                    !clean_read(&tampered),
+                    "SQLite3MC's {} scheme accepted damage undetected for {case:#?}: {}",
+                    cipher.name(),
+                    describe(tampered.iter().rev().take(3)),
+                );
+            }
+        }
+    }
+
+    remove(&clean);
+    remove(&damaged);
+}
+
+/// Everything SQLite3MC can read back from `path` with `config`'s key, up to the first failure.
+fn dump_native(path: &Path, config: &NativeConfig) -> Vec<Record> {
+    dump(&SQLITE3MC, path, |c| configure_native(c, config))
 }
 
 const fn api(side: Side) -> &'static Api {
@@ -286,6 +421,120 @@ fn configure_sqlcipher(connection: &Connection<'_>, config: &Config) -> Result<(
     Ok(())
 }
 
+/// `key`'s bytes, truncated to `key_len` where that is shorter than the form's own natural
+/// length, matching what [`Cipher::key_len`] says the scheme actually consumes.
+fn native_key_bytes(key: &NativeKey, key_len: usize) -> Vec<u8> {
+    match key {
+        NativeKey::Raw(key) => {
+            let mut text = String::from("x'");
+            hex(&key[..key_len], &mut text);
+            text.push('\'');
+            text.into_bytes()
+        }
+        NativeKey::RawWithSalt { key, salt } => {
+            let mut text = String::from("x'");
+            hex(&key[..key_len], &mut text);
+            hex(salt, &mut text);
+            text.push('\'');
+            text.into_bytes()
+        }
+        NativeKey::Passphrase { bytes, .. } => bytes.clone(),
+    }
+}
+
+/// The bytes that actually determine `key`'s derived key, ignoring parts that influence only what
+/// gets stored for reopening (the embedded salt in [`NativeKey::RawWithSalt`], never consulted
+/// for the key itself since a raw key bypasses derivation entirely), a requested `kdf_iter` a
+/// cipher's own `GenerateKey*Cipher` never reads ([`Cipher::has_kdf_iter`] false), or passphrase
+/// bytes beyond [`Cipher::passphrase_prefix_len`] that the same function never reads either.
+fn native_key_material(key: &NativeKey, cipher: Cipher, key_len: usize) -> Vec<u8> {
+    match key {
+        NativeKey::Raw(key) | NativeKey::RawWithSalt { key, .. } => key[..key_len].to_vec(),
+        NativeKey::Passphrase { bytes, .. } => cipher.passphrase_prefix_len().map_or_else(
+            || bytes.clone(),
+            |limit| bytes[..bytes.len().min(limit)].to_vec(),
+        ),
+    }
+}
+
+/// Whether `a` and `b` derive the same key for `cipher`, so a round-trip or wrong-key oracle
+/// comparing them would prove nothing.
+fn native_keys_equivalent(a: &NativeKey, b: &NativeKey, cipher: Cipher, key_len: usize) -> bool {
+    if native_key_material(a, cipher, key_len) != native_key_material(b, cipher, key_len) {
+        return false;
+    }
+    match (a, b) {
+        (
+            NativeKey::Passphrase { kdf_iter: ia, .. },
+            NativeKey::Passphrase { kdf_iter: ib, .. },
+        ) => ia == ib || !cipher.has_kdf_iter(),
+        // Same literal bytes, but one side bypasses derivation (a raw key) and the other goes
+        // through it (a passphrase): only indistinguishable where the cipher has no raw-key
+        // bypass to begin with, so every key form degenerates to a passphrase already.
+        (NativeKey::Passphrase { .. }, _) | (_, NativeKey::Passphrase { .. }) => {
+            !cipher.supports_raw_key()
+        }
+        _ => true,
+    }
+}
+
+/// The AEGIS `algorithm` value for the 128-bit or 256-bit family, picking the plain (non-SIMD)
+/// variant of each: `aegis-128l` or `aegis-256`. The SIMD variants share the same key length and
+/// tag, so are not separately modelled.
+const fn aegis_algorithm(select_256: bool) -> c_int {
+    if select_256 {
+        4
+    } else {
+        1
+    }
+}
+
+/// Applies `config` and the key to SQLite3MC's own native scheme, returning only a refused key as
+/// an observation.
+fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Result<(), Code> {
+    let cipher_name = CString::new(config.cipher.name()).expect("cipher names have no NUL");
+    let index = connection.sqlite3mc_cipher_index(&cipher_name);
+    assert_eq!(
+        connection.sqlite3mc_config(c"cipher", index),
+        index,
+        "SQLite3MC refused its {} scheme",
+        config.cipher.name()
+    );
+    let set = |param: &CStr, value: c_int| {
+        let set = connection.sqlite3mc_config_cipher(&cipher_name, param, value);
+        assert_eq!(
+            set,
+            value,
+            "SQLite3MC refused {} {param:?} = {value}",
+            config.cipher.name()
+        );
+    };
+    if let Some(legacy) = config.legacy {
+        set(c"legacy", c_int::from(legacy));
+    }
+    if let Some(page_size) = config.page_size {
+        set(
+            c"legacy_page_size",
+            c_int::try_from(page_size).expect("page sizes fit an int"),
+        );
+    }
+    if matches!(config.cipher, Cipher::Aegis) {
+        set(c"algorithm", aegis_algorithm(config.aegis_algorithm_256));
+    }
+    if let NativeKey::Passphrase { kdf_iter, .. } = config.key {
+        if config.cipher.has_kdf_iter() {
+            set(c"kdf_iter", c_int::from(kdf_iter));
+        }
+    }
+    if let Some(header) = config.plaintext_header_size {
+        set(c"plaintext_header_size", c_int::from(header));
+    }
+    connection.key(&native_key_bytes(
+        &config.key,
+        config.cipher.key_len(config.aegis_algorithm_256),
+    ))
+}
+
 /// Bytes from a xorshift generator, so a blob is incompressible and unlike its neighbours.
 fn blob(len: u16, seed: u8) -> Vec<u8> {
     let mut state = 0x9e37_79b9_u32 ^ u32::from(seed);
@@ -345,18 +594,27 @@ fn write(side: Side, path: &Path, case: &Case) {
     if let Err(code) = configure(&connection, side, &case.config) {
         panic!("{} refused the key of a new database: {code:?}", name(side));
     }
+    run_workload(&connection, name(side), &case.ops, case);
+}
+
+/// Runs `ops` against an already-open, already-configured connection, panicking with `label` and
+/// `context`'s own Debug output naming what failed. Shared by the differential writer and any
+/// other input model that drives a workload against one connection.
+pub(crate) fn run_workload<D: std::fmt::Debug>(
+    connection: &Connection<'_>,
+    label: &str,
+    ops: &[Op],
+    context: &D,
+) {
     let mut created = [false; 3];
     // Tables created inside a transaction disappear again on rollback.
     let mut before_transaction: Option<[bool; 3]> = None;
     let run = |text: &str, params: &[Param<'_>], op: &Op| {
         if let Err(code) = connection.execute(&sql(text), params) {
-            panic!(
-                "{} failed {op:?} ({text}) with {code:?} for {case:#?}",
-                name(side)
-            );
+            panic!("{label} failed {op:?} ({text}) with {code:?} for {context:#?}");
         }
     };
-    for op in case.ops.iter().take(Case::MAX_OPS) {
+    for op in ops.iter().take(MAX_OPS) {
         let exists = |table: Table| created[table.index()];
         match op {
             Op::Create(table) => {
@@ -427,17 +685,22 @@ fn write(side: Side, path: &Path, case: &Case) {
     }
 }
 
-/// Everything `side` can read from the file at `path`, up to the first failure.
-fn dump(side: Side, path: &Path, config: &Config) -> Vec<Record> {
+/// Everything `api` can read from the file at `path` with the key `configure` applies, up to the
+/// first failure.
+fn dump(
+    api: &Api,
+    path: &Path,
+    configure: impl FnOnce(&Connection<'_>) -> Result<(), Code>,
+) -> Vec<Record> {
     let mut log = Vec::new();
-    let connection = match Connection::open(api(side), &c_path(path), SQLITE_OPEN_READONLY) {
+    let connection = match Connection::open(api, &c_path(path), SQLITE_OPEN_READONLY) {
         Ok(connection) => connection,
         Err(code) => {
             log.push(Record::Failed("open", code));
             return log;
         }
     };
-    if let Err(code) = configure(&connection, side, config) {
+    if let Err(code) = configure(&connection) {
         log.push(Record::Failed("key", code));
         return log;
     }

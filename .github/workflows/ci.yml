@@ -62,7 +62,7 @@ jobs:
 
   # The fuzz crate is its own workspace, so no other job runs its tests.
   fuzz:
-    name: Fuzz corpus agrees with SQLCipher
+    name: Fuzz corpus replays cleanly
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

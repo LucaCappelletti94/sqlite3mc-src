@@ -1,4 +1,5 @@
-//! Differential fuzzing of SQLite3MC's `sqlcipher` scheme against SQLCipher on the same SQLite.
+//! Fuzzing SQLite3MC against SQLCipher differentially, and its own native ciphers for
+//! self-consistency, on the same SQLite.
 
 #![expect(
     clippy::redundant_pub_crate,
@@ -12,5 +13,8 @@ mod input;
 mod run;
 
 pub use db::{Code, Value};
-pub use input::{Algorithm, Case, Cell, Column, Config, Flip, Key, Op, Side, Table};
-pub use run::run;
+pub use input::{
+    Algorithm, Case, Cell, Cipher, Column, Config, Flip, Key, NativeCase, NativeConfig, NativeKey,
+    Op, Side, Table, MAX_FLIPS, MAX_OPS,
+};
+pub use run::{run, run_native};
