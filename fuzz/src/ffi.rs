@@ -74,6 +74,7 @@ pub(crate) struct Api {
     ) -> *mut Backup,
     pub(crate) backup_step: unsafe extern "C" fn(*mut Backup, c_int) -> c_int,
     pub(crate) backup_finish: unsafe extern "C" fn(*mut Backup) -> c_int,
+    pub(crate) enable_shared_cache: unsafe extern "C" fn(c_int) -> c_int,
     pub(crate) sqlite3mc: Option<Sqlite3mcApi>,
 }
 
@@ -127,6 +128,7 @@ macro_rules! common {
             sqlite3_backup_init(*mut Sqlite3, *const c_char, *mut Sqlite3, *const c_char) -> *mut Backup;
             sqlite3_backup_step(*mut Backup, c_int) -> c_int;
             sqlite3_backup_finish(*mut Backup) -> c_int;
+            sqlite3_enable_shared_cache(c_int) -> c_int;
             $($extra($($arg),*) -> $ret;)*
         });
     };
@@ -168,6 +170,7 @@ macro_rules! api {
             backup_init: $module::sqlite3_backup_init,
             backup_step: $module::sqlite3_backup_step,
             backup_finish: $module::sqlite3_backup_finish,
+            enable_shared_cache: $module::sqlite3_enable_shared_cache,
             sqlite3mc: $sqlite3mc,
         }
     };

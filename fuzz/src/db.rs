@@ -55,6 +55,14 @@ pub(crate) enum Param<'a> {
     Blob(&'a [u8]),
 }
 
+/// `sqlite3_enable_shared_cache`: process-wide, not tied to any one connection. Every connection
+/// opened after this call defaults to shared-cache mode (`SQLITE_OPEN_PRIVATECACHE` overrides it
+/// per connection, not used anywhere in this harness).
+pub(crate) fn enable_shared_cache(api: &Api, enable: bool) -> Result<(), Code> {
+    // SAFETY: takes a plain `c_int`, touches no pointers, safe to call at any time.
+    check(unsafe { (api.enable_shared_cache)(c_int::from(enable)) })
+}
+
 /// An open connection, closed on drop.
 pub(crate) struct Connection<'a> {
     api: &'a Api,

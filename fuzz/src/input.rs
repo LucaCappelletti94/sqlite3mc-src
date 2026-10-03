@@ -725,3 +725,38 @@ pub struct BackupCase {
     /// steps of it.
     pub dest_ops: Vec<Op>,
 }
+
+/// Connections beyond this, opened to the same file under shared-cache mode, are ignored.
+pub const MAX_SIBLINGS: usize = 3;
+
+/// One sibling connection, opened to the same file `main` already created and populated under
+/// [`SharedCacheCase::written`]'s key, under shared-cache mode.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+pub struct SharedConnection {
+    /// The cipher and key this connection stages and keys with, almost certainly not
+    /// [`SharedCacheCase::written`].
+    pub config: NativeConfig,
+    /// Workload attempted on this connection after opening, at most [`MAX_OPS`] steps of it,
+    /// tolerated to fail when this connection's own key turned out wrong.
+    pub ops: Vec<Op>,
+}
+
+/// One shared-cache execution: a main connection creates and populates a database, then up to
+/// [`MAX_SIBLINGS`] further connections open the *same* file under shared-cache mode.
+///
+/// Each sibling has its own cipher and key, almost certainly not matching `main`'s.
+///
+/// Oracle: `main` never changes its own key; its own reads must keep succeeding throughout,
+/// regardless of what any sibling connection does to the file it shares with it, correct key,
+/// wrong key, or a different cipher entirely. Also checked after every connection closes: the
+/// file itself must still read back cleanly under `written`, the same way the other harnesses'
+/// own "nothing corrupts the file at rest" oracle does.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+pub struct SharedCacheCase {
+    /// `main`'s own cipher and key, the file's one true key.
+    pub written: NativeConfig,
+    /// Workload `main` runs before any sibling connects, at most [`MAX_OPS`] steps of it.
+    pub main_ops: Vec<Op>,
+    /// Sibling connections to the same file, at most [`MAX_SIBLINGS`] of them.
+    pub siblings: Vec<SharedConnection>,
+}
