@@ -588,3 +588,44 @@ impl<'a> Arbitrary<'a> for RekeyCase {
         })
     }
 }
+
+/// `PRAGMA wal_checkpoint` mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Arbitrary)]
+pub enum Checkpoint {
+    Passive,
+    Full,
+    Restart,
+    Truncate,
+}
+
+impl Checkpoint {
+    /// The keyword `PRAGMA wal_checkpoint(...)` takes.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Passive => "PASSIVE",
+            Self::Full => "FULL",
+            Self::Restart => "RESTART",
+            Self::Truncate => "TRUNCATE",
+        }
+    }
+}
+
+/// One WAL-mode execution: write under `journal_mode=WAL`, optionally checkpoint, close,
+/// optionally truncate the `-wal` file (simulating a crash mid-write), then reopen and verify.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+pub struct WalCase {
+    /// The cipher and key.
+    pub config: NativeConfig,
+    /// `mc_legacy_wal`: `true` selects the older WAL frame encryption, which the project's own
+    /// source comments recommend only for recovering journals written before version 1.3.0, not
+    /// for general use, having previously been capable of data loss after a crash.
+    pub legacy_wal: bool,
+    /// Workload, at most [`MAX_OPS`] steps of it.
+    pub ops: Vec<Op>,
+    /// An optional `PRAGMA wal_checkpoint` before closing.
+    pub checkpoint: Option<Checkpoint>,
+    /// Bytes truncated off the end of the `-wal` file before reopening, simulating a crash
+    /// mid-write. `0` means a clean close.
+    pub truncate_wal_tail: u16,
+}

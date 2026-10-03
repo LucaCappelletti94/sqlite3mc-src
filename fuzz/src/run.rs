@@ -17,7 +17,7 @@ use crate::{
     },
     input::{
         Algorithm, Case, Cell, Cipher, Column, Config, Key, NativeCase, NativeConfig, NativeKey,
-        Op, RekeyAction, RekeyCase, Side, Table, MAX_FLIPS, MAX_OPS,
+        Op, RekeyAction, RekeyCase, Side, Table, WalCase, MAX_FLIPS, MAX_OPS,
     },
 };
 
@@ -341,6 +341,97 @@ pub fn run_rekey(case: &RekeyCase) {
             );
         }
     }
+
+    remove(&clean);
+}
+
+/// Runs `case` against SQLite3MC's `journal_mode=WAL` support.
+///
+/// Writes under WAL, optionally checkpoints, closes, optionally truncates the `-wal` file to
+/// simulate a crash mid-write, then reopens and confirms the database still reads back cleanly:
+/// `journal_mode=WAL` never excuses `SQLITE_NOTADB` or a failed `integrity_check`, truncation or
+/// not, only losing the most recent, uncheckpointed writes is acceptable.
+///
+/// # Panics
+///
+/// When SQLite3MC refuses a setting or step the harness generates as valid, or the oracle fails.
+pub fn run_wal(case: &WalCase) {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+
+    let dir = WORKDIR.as_path();
+    let clean = dir.join("wal.db");
+    remove(&clean);
+
+    let cipher = case.config.cipher;
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(&clean),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} database: {code:?}",
+            cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, &case.config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} database: {code:?}",
+            cipher.name()
+        );
+    }
+    let legacy_wal = c_int::from(case.legacy_wal);
+    assert_eq!(
+        connection.sqlite3mc_config(c"mc_legacy_wal", legacy_wal),
+        legacy_wal,
+        "SQLite3MC refused mc_legacy_wal = {legacy_wal}"
+    );
+    if let Err(code) = connection.execute(c"PRAGMA journal_mode=WAL", &[]) {
+        panic!(
+            "SQLite3MC refused WAL journal mode for a {} database: {code:?}",
+            cipher.name()
+        );
+    }
+    run_workload(&connection, "SQLite3MC", &case.ops, case);
+    if let Some(checkpoint) = case.checkpoint {
+        let text = sql(&format!("PRAGMA wal_checkpoint({})", checkpoint.name()));
+        if let Err(code) = connection.execute(&text, &[]) {
+            panic!(
+                "SQLite3MC refused a {} checkpoint on a {} database: {code:?}",
+                checkpoint.name(),
+                cipher.name()
+            );
+        }
+    }
+    drop(connection);
+
+    if case.truncate_wal_tail > 0 {
+        let mut wal_path = clean.as_os_str().to_owned();
+        wal_path.push("-wal");
+        if let Ok(bytes) = fs::read(&wal_path) {
+            let keep = bytes
+                .len()
+                .saturating_sub(usize::from(case.truncate_wal_tail));
+            if keep < bytes.len() {
+                fs::write(&wal_path, &bytes[..keep]).expect("the work directory is writable");
+            }
+        }
+    }
+
+    let own = dump_native(&clean, &case.config);
+    assert!(
+        clean_read(&own),
+        "SQLite3MC cannot read back its own {} WAL-mode file for {case:#?}: {}",
+        cipher.name(),
+        describe(own.iter().rev().take(3)),
+    );
 
     remove(&clean);
 }
