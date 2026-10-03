@@ -156,6 +156,68 @@ impl<'a> Connection<'a> {
     pub(crate) fn execute(&self, sql: &CStr, params: &[Param<'_>]) -> Result<(), Code> {
         self.prepare(sql)?.run(params)
     }
+
+    /// Starts a backup into `self` (as `dest_name`) from `src` (as `src_name`). `None` when the
+    /// pair is refused outright, SQLite's own built-in restrictions or SQLite3MC's
+    /// `sqlite3mcIsBackupSupported` compatibility guard alike.
+    pub(crate) fn backup_init(
+        &self,
+        dest_name: &CStr,
+        src: &Self,
+        src_name: &CStr,
+    ) -> Option<BackupJob<'a>> {
+        // SAFETY: both connections are open for the call's duration, both names are
+        // NUL-terminated, and the returned handle, if any, is owned by the new `BackupJob`.
+        let handle = unsafe {
+            (self.api.backup_init)(
+                self.db.as_ptr(),
+                dest_name.as_ptr(),
+                src.db.as_ptr(),
+                src_name.as_ptr(),
+            )
+        };
+        NonNull::new(handle).map(|handle| BackupJob {
+            api: self.api,
+            handle,
+        })
+    }
+}
+
+/// A `sqlite3_backup` in progress. [`BackupJob::finish`] is the intended end; dropping one that
+/// was never finished calls `sqlite3_backup_finish` anyway, so an early-abandoned backup is
+/// still released.
+pub(crate) struct BackupJob<'a> {
+    api: &'a Api,
+    handle: NonNull<crate::ffi::Backup>,
+}
+
+impl BackupJob<'_> {
+    /// Runs up to `n_page` pages (negative for "all remaining"), returning the raw result code:
+    /// callers need `SQLITE_DONE` (101) distinguished from a plain `SQLITE_OK` (0) success.
+    pub(crate) fn step(&self, n_page: c_int) -> c_int {
+        // SAFETY: the handle is valid until `finish`/drop, and `step` never invalidates it.
+        unsafe { (self.api.backup_step)(self.handle.as_ptr(), n_page) }
+    }
+
+    /// Ends the backup. Finishes it immediately, then forgets `self` so [`BackupJob`]'s own
+    /// `Drop` never runs and finishes the same handle a second time.
+    pub(crate) fn finish(self) -> Result<(), Code> {
+        // SAFETY: `handle` came from a successful `backup_init`; `mem::forget` below is what
+        // keeps this the only call that finishes it.
+        let result = check(unsafe { (self.api.backup_finish)(self.handle.as_ptr()) });
+        core::mem::forget(self);
+        result
+    }
+}
+
+impl Drop for BackupJob<'_> {
+    fn drop(&mut self) {
+        // SAFETY: only reached when `finish` was never called, since `finish` forgets `self`
+        // first; `self.handle` is still valid and this is its only release.
+        unsafe {
+            (self.api.backup_finish)(self.handle.as_ptr());
+        }
+    }
 }
 
 impl Drop for Connection<'_> {

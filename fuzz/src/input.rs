@@ -678,3 +678,50 @@ pub struct AttachCase {
     /// whatever `attached[0].attach_key` did.
     pub detach_reattach: bool,
 }
+
+/// A `PRAGMA page_size` value, a power of two from 512 to 65536.
+///
+/// Distinct from [`NativeConfig::page_size`] (the cipher's own `legacy_page_size` parameter):
+/// this is the ordinary SQLite btree page size, set through SQL rather than
+/// `sqlite3mc_config_cipher`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageSize(u32);
+
+impl PageSize {
+    /// The page size in bytes.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl<'a> Arbitrary<'a> for PageSize {
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        Ok(Self(1 << u.int_in_range(9..=16)?))
+    }
+}
+
+/// One `sqlite3_backup` execution: writes a source, optionally pre-populates a destination with
+/// unrelated content, then runs `sqlite3_backup_init`/`_step`/`_finish` between them.
+///
+/// Oracle: if SQLite3MC's own compatibility guard (`sqlite3mcIsBackupSupported`, called from
+/// `sqlite3_backup_init`) lets the pair through, and every step reports success, the destination
+/// must reopen cleanly with its own true key; a refused pair (`backup_init` returning `NULL`) is
+/// not a defect, since this harness exists to find exactly the cases where that guard *should*
+/// have refused the pair but did not.
+#[derive(Debug, Clone, PartialEq, Arbitrary)]
+pub struct BackupCase {
+    /// The source database's own cipher and key.
+    pub src: NativeConfig,
+    /// `PRAGMA page_size` for the source, set before its first write when given.
+    pub src_page_size: Option<PageSize>,
+    /// Workload populating the source before backup, at most [`MAX_OPS`] steps of it.
+    pub src_ops: Vec<Op>,
+    /// The destination database's own cipher and key, almost certainly not [`BackupCase::src`].
+    pub dest: NativeConfig,
+    /// `PRAGMA page_size` for the destination, set before its first write when given.
+    pub dest_page_size: Option<PageSize>,
+    /// Workload populating the destination before backup overwrites it, at most [`MAX_OPS`]
+    /// steps of it.
+    pub dest_ops: Vec<Op>,
+}

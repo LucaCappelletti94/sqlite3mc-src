@@ -13,12 +13,13 @@ use std::{
 use crate::{
     db::{Code, Connection, Param, Value},
     ffi::{
-        Api, SQLCIPHER, SQLITE3MC, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE,
+        Api, SQLCIPHER, SQLITE3MC, SQLITE_DONE, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY,
+        SQLITE_OPEN_READWRITE,
     },
     input::{
-        Algorithm, AttachCase, AttachedDb, Case, Cell, Cipher, Column, Config, Key, NativeCase,
-        NativeConfig, NativeKey, Op, RekeyAction, RekeyCase, Side, Table, WalCase, MAX_ATTACHED,
-        MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
+        Algorithm, AttachCase, AttachedDb, BackupCase, Case, Cell, Cipher, Column, Config, Key,
+        NativeCase, NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, Side, Table,
+        WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
     },
 };
 
@@ -646,6 +647,101 @@ fn exercise_attached(
     {
         attach(connection, db_name, path_str, Some(&attached.written));
     }
+}
+
+/// Runs `case` against SQLite3MC's `sqlite3_backup_*` API.
+///
+/// Writes a source and, separately, a destination (which may carry unrelated content of its
+/// own), each with its own cipher, key, and `PRAGMA page_size`, then backs the source up into the
+/// destination. When `sqlite3_backup_init`'s own compatibility guard (`sqlite3mcIsBackupSupported`)
+/// refuses the pair, there is nothing further to check: that is the guard working as intended.
+/// When it lets the pair through and the backup reports full success, the destination must still
+/// reopen cleanly with its own true key: `sqlite3_backup_step`/`_finish` reporting success for a
+/// destination that cannot actually be read back is exactly the defect issue #158 described, and
+/// exactly what this harness exists to catch a recurrence of.
+///
+/// # Panics
+///
+/// When SQLite3MC refuses a setting or step the harness generates as valid, or a backup the guard
+/// allowed and that reported full success leaves an unreadable destination.
+pub fn run_backup(case: &BackupCase) {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+
+    let dir = WORKDIR.as_path();
+    let src_path = dir.join("backup-src.db");
+    let dest_path = dir.join("backup-dest.db");
+    remove(&src_path);
+    remove(&dest_path);
+
+    let src = open_for_backup(&src_path, &case.src, case.src_page_size, &case.src_ops);
+    let dest = open_for_backup(&dest_path, &case.dest, case.dest_page_size, &case.dest_ops);
+
+    if let Some(job) = dest.backup_init(c"main", &src, c"main") {
+        let step_rc = job.step(-1);
+        let finish_result = job.finish();
+        if step_rc == SQLITE_DONE && finish_result.is_ok() {
+            drop(src);
+            drop(dest);
+            let dump = dump_native(&dest_path, &case.dest);
+            assert!(
+                clean_read(&dump),
+                "SQLite3MC's sqlite3_backup_init let through, and backup_step/backup_finish \
+                 reported success for, a backup into its own {} destination that cannot be read \
+                 back for {case:#?}: {}",
+                case.dest.cipher.name(),
+                describe(dump.iter().rev().take(3)),
+            );
+        }
+    }
+
+    remove(&src_path);
+    remove(&dest_path);
+}
+
+/// Opens a new SQLite3MC file at `path`, stages and applies `config`'s cipher and key, sets
+/// `page_size` through `PRAGMA page_size` first when given, then runs `ops`.
+fn open_for_backup<'a>(
+    path: &Path,
+    config: &NativeConfig,
+    page_size: Option<PageSize>,
+    ops: &[Op],
+) -> Connection<'a> {
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(path),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} file: {code:?}",
+            config.cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} file: {code:?}",
+            config.cipher.name()
+        );
+    }
+    if let Some(page_size) = page_size {
+        let text = sql(&format!("PRAGMA page_size={}", page_size.get()));
+        if let Err(code) = connection.execute(&text, &[]) {
+            panic!(
+                "SQLite3MC refused PRAGMA page_size={} on a new {} file: {code:?}",
+                page_size.get(),
+                config.cipher.name()
+            );
+        }
+    }
+    run_workload(&connection, "SQLite3MC", ops, config);
+    connection
 }
 
 /// Runs `ATTACH DATABASE path_str AS db_name`, staging `attach_key`'s cipher and supplying its

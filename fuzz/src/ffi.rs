@@ -14,6 +14,12 @@ pub(crate) struct Stmt {
     _private: [u8; 0],
 }
 
+/// Opaque `sqlite3_backup`.
+#[repr(C)]
+pub(crate) struct Backup {
+    _private: [u8; 0],
+}
+
 /// `SQLITE_STATIC`: the caller keeps bound bytes alive until the statement is reset.
 pub(crate) type Destructor = Option<unsafe extern "C" fn(*mut c_void)>;
 
@@ -60,6 +66,14 @@ pub(crate) struct Api {
     pub(crate) column_text: unsafe extern "C" fn(*mut Stmt, c_int) -> *const u8,
     pub(crate) column_blob: unsafe extern "C" fn(*mut Stmt, c_int) -> *const c_void,
     pub(crate) column_bytes: unsafe extern "C" fn(*mut Stmt, c_int) -> c_int,
+    pub(crate) backup_init: unsafe extern "C" fn(
+        *mut Sqlite3,
+        *const c_char,
+        *mut Sqlite3,
+        *const c_char,
+    ) -> *mut Backup,
+    pub(crate) backup_step: unsafe extern "C" fn(*mut Backup, c_int) -> c_int,
+    pub(crate) backup_finish: unsafe extern "C" fn(*mut Backup) -> c_int,
     pub(crate) sqlite3mc: Option<Sqlite3mcApi>,
 }
 
@@ -74,7 +88,7 @@ pub(crate) struct Sqlite3mcApi {
 macro_rules! bindings {
     ($module:ident, $prefix:literal, { $($name:ident($($arg:ty),*) $(-> $ret:ty)?;)* }) => {
         mod $module {
-            use super::{c_char, c_double, c_int, c_void, Destructor, Sqlite3, Stmt};
+            use super::{c_char, c_double, c_int, c_void, Backup, Destructor, Sqlite3, Stmt};
 
             unsafe extern "C" {
                 $(
@@ -110,6 +124,9 @@ macro_rules! common {
             sqlite3_column_text(*mut Stmt, c_int) -> *const u8;
             sqlite3_column_blob(*mut Stmt, c_int) -> *const c_void;
             sqlite3_column_bytes(*mut Stmt, c_int) -> c_int;
+            sqlite3_backup_init(*mut Sqlite3, *const c_char, *mut Sqlite3, *const c_char) -> *mut Backup;
+            sqlite3_backup_step(*mut Backup, c_int) -> c_int;
+            sqlite3_backup_finish(*mut Backup) -> c_int;
             $($extra($($arg),*) -> $ret;)*
         });
     };
@@ -148,6 +165,9 @@ macro_rules! api {
             column_text: $module::sqlite3_column_text,
             column_blob: $module::sqlite3_column_blob,
             column_bytes: $module::sqlite3_column_bytes,
+            backup_init: $module::sqlite3_backup_init,
+            backup_step: $module::sqlite3_backup_step,
+            backup_finish: $module::sqlite3_backup_finish,
             sqlite3mc: $sqlite3mc,
         }
     };

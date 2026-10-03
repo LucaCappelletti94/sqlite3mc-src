@@ -3,7 +3,7 @@ name = "sqlite3mc-src-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Fuzzing SQLite3MC against SQLCipher differentially, its own native ciphers for self-consistency, its rekey support, its WAL journal mode, and its ATTACH DATABASE support"
+description = "Fuzzing SQLite3MC against SQLCipher differentially, its own native ciphers for self-consistency, its rekey support, its WAL journal mode, its ATTACH DATABASE support, and its backup API"
 
 [package.metadata]
 cargo-fuzz = true
@@ -48,6 +48,13 @@ bench = false
 [[bin]]
 name = "attach"
 path = "fuzz_targets/attach.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backup"
+path = "fuzz_targets/backup.rs"
 test = false
 doc = false
 bench = false
