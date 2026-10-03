@@ -6,7 +6,7 @@ publish = false
 description = "Builds sqlite-wasm-rs's sqlite3mc feature from the vendored amalgamation and exchanges encrypted files with the native build"
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
 
 [dev-dependencies]
