@@ -299,6 +299,16 @@ pub fn run_rekey(case: &RekeyCase) {
         RekeyAction::ChangeKey(key) => native_key_bytes(key, key_len),
         RekeyAction::Decrypt => Vec::new(),
     };
+    // SQLite3MC consumes pending `sqlite3mc_config`/`sqlite3mc_config_cipher` state at every
+    // key-applying call, `sqlite3_rekey` included, not just the original `sqlite3_key`: a value
+    // staged only once, before the connection's first key, does not carry over to a later
+    // rekey. Re-stage immediately before this call, using the new key's own `kdf_iter` when it
+    // carries one (upstream issue #236 documents the same requirement for `PRAGMA` sequences).
+    let mut rekey_config = case.config.clone();
+    if let RekeyAction::ChangeKey(new_key) = &case.action {
+        rekey_config.key = new_key.clone();
+    }
+    stage_cipher(&connection, &rekey_config);
     if let Err(code) = connection.rekey(&new_key_bytes) {
         panic!(
             "SQLite3MC refused to rekey a {} database: {code:?} for {case:#?}",
