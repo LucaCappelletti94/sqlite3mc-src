@@ -629,3 +629,52 @@ pub struct WalCase {
     /// mid-write. `0` means a clean close.
     pub truncate_wal_tail: u16,
 }
+
+/// Attached databases beyond this are ignored, bounding one execution's file count. Shared the
+/// same way as [`MAX_OPS`].
+pub const MAX_ATTACHED: usize = 2;
+/// Rows inserted into any one database inside an [`AttachCase`] beyond this are ignored.
+pub const MAX_ATTACH_ROWS: usize = 8;
+
+/// One database an [`AttachCase`]'s main connection attaches alongside its own.
+#[derive(Debug, Clone, PartialEq, Eq, Arbitrary)]
+pub struct AttachedDb {
+    /// The cipher and key this attached file is actually created and keyed with, through
+    /// `ATTACH ... KEY` on first use. Verified independently after the session by reopening this
+    /// exact file standalone with this exact config.
+    pub written: NativeConfig,
+    /// Rows inserted into this database's own table while attached, at most
+    /// [`MAX_ATTACH_ROWS`].
+    pub rows: u8,
+    /// Cipher settings staged, and a key supplied, in the live connection's own `ATTACH ... KEY`
+    /// clause, almost certainly not [`AttachedDb::written`]. `None` omits the `KEY` clause
+    /// entirely, which SQLite3MC resolves by copying the main database's own current codec
+    /// verbatim (`sqlite3mcCodecAttach`'s no-key branch), never consulting this field at all.
+    pub attach_key: Option<NativeConfig>,
+    /// `VACUUM db1`/`VACUUM db2` after inserting.
+    pub vacuum: bool,
+}
+
+/// One multi-database execution: a main connection plus up to [`MAX_ATTACHED`] attached
+/// databases, each with their own cipher and key.
+///
+/// Exercises `ATTACH`/`DETACH` and SQLite3MC's per-connection cipher staging across them.
+/// Oracle: regardless of what the shared connection does to an attached database, correct key,
+/// wrong key, or an inherited one, every database's own file must stay readable afterward with
+/// its own true key, never corrupted by another database's session on the same connection.
+#[derive(Debug, Clone, PartialEq, Eq, Arbitrary)]
+pub struct AttachCase {
+    /// The main connection's own cipher and key.
+    pub main: NativeConfig,
+    /// Rows inserted into main's own table before attaching anything, at most
+    /// [`MAX_ATTACH_ROWS`].
+    pub main_rows: u8,
+    /// Attached databases, at most [`MAX_ATTACHED`] of them.
+    pub attached: Vec<AttachedDb>,
+    /// `INSERT INTO db1.t0 SELECT i FROM main.t0`, attempted once the first attached database
+    /// exists, tolerated to fail when its key turned out wrong.
+    pub cross_copy: bool,
+    /// `DETACH db1`, then re-`ATTACH` it with its own true key, exercising a clean reattach after
+    /// whatever `attached[0].attach_key` did.
+    pub detach_reattach: bool,
+}

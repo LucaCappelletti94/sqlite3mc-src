@@ -16,8 +16,9 @@ use crate::{
         Api, SQLCIPHER, SQLITE3MC, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE,
     },
     input::{
-        Algorithm, Case, Cell, Cipher, Column, Config, Key, NativeCase, NativeConfig, NativeKey,
-        Op, RekeyAction, RekeyCase, Side, Table, WalCase, MAX_FLIPS, MAX_OPS,
+        Algorithm, AttachCase, AttachedDb, Case, Cell, Cipher, Column, Config, Key, NativeCase,
+        NativeConfig, NativeKey, Op, RekeyAction, RekeyCase, Side, Table, WalCase, MAX_ATTACHED,
+        MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
     },
 };
 
@@ -436,6 +437,249 @@ pub fn run_wal(case: &WalCase) {
     remove(&clean);
 }
 
+/// Runs `case` against SQLite3MC's `ATTACH DATABASE` support.
+///
+/// Each attached database is first written standalone, with its own true cipher and key, exactly
+/// as if some earlier, unrelated session had created it. Only then does a main connection attach
+/// up to [`MAX_ATTACHED`] of them, each through a correct key, a wrong one, or an omitted one
+/// that inherits the main connection's current codec, plus an optional `VACUUM`, a cross-database
+/// copy, and a detach/reattach cycle. Closes everything, then reopens every database's own file
+/// standalone with its own true config: regardless of what happened to it while attached, it must
+/// still read back cleanly.
+///
+/// # Panics
+///
+/// When SQLite3MC refuses a setting or step the harness generates as valid, or a database's own
+/// file fails to read back cleanly afterward.
+pub fn run_attach(case: &AttachCase) {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+
+    let dir = WORKDIR.as_path();
+    let main_path = dir.join("attach-main.db");
+    let attached_count = case.attached.len().min(MAX_ATTACHED);
+    let attached_paths: Vec<PathBuf> = (0..attached_count)
+        .map(|index| dir.join(format!("attach-{index}.db")))
+        .collect();
+    remove(&main_path);
+    for path in &attached_paths {
+        remove(path);
+    }
+
+    for (path, attached) in attached_paths.iter().zip(case.attached.iter()) {
+        write_native(
+            path,
+            &attached.written,
+            usize::from(attached.rows).min(MAX_ATTACH_ROWS),
+        );
+    }
+
+    let main_cipher = case.main.cipher;
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(&main_path),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} main database: {code:?}",
+            main_cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, &case.main) {
+        panic!(
+            "SQLite3MC refused the key of a new {} main database: {code:?}",
+            main_cipher.name()
+        );
+    }
+    if let Err(code) = connection.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
+        panic!(
+            "SQLite3MC refused to create main's own {} table: {code:?}",
+            main_cipher.name()
+        );
+    }
+    for i in 0..usize::from(case.main_rows).min(MAX_ATTACH_ROWS) {
+        let row = i64::try_from(i).expect("row indices stay far below i64::MAX");
+        if let Err(code) =
+            connection.execute(c"INSERT INTO t0(i) VALUES (?1)", &[Param::Integer(row)])
+        {
+            panic!(
+                "SQLite3MC refused to insert into main's own {} table: {code:?}",
+                main_cipher.name()
+            );
+        }
+    }
+
+    for (index, attached) in case.attached.iter().take(MAX_ATTACHED).enumerate() {
+        let path_str = attached_paths[index]
+            .to_str()
+            .expect("the work directory is valid UTF-8");
+        exercise_attached(
+            &connection,
+            index,
+            attached,
+            case.cross_copy,
+            case.detach_reattach,
+            path_str,
+        );
+    }
+    drop(connection);
+
+    let own = dump_native(&main_path, &case.main);
+    assert!(
+        clean_read(&own),
+        "SQLite3MC cannot read back its own {} main database after an ATTACH session for {case:#?}: {}",
+        main_cipher.name(),
+        describe(own.iter().rev().take(3)),
+    );
+
+    for (index, attached) in case.attached.iter().take(MAX_ATTACHED).enumerate() {
+        // A wrong key, or a wrong cipher parameter even with the same key bytes, that `VACUUM`
+        // or the cross-database copy then actually wrote through is not a defect: an
+        // unauthenticated legacy scheme has no integrity check to catch it, so the file has
+        // legitimately become whatever that wrong configuration wrote, the same way
+        // `NativeCase`'s own wrong-key oracle only ever reads under a wrong key, never writes.
+        // Only a database attached with its own true key is expected to stay recoverable under
+        // it; a sibling's mishap corrupting THIS database's own correctly-keyed file would still
+        // be caught here, which is the actual cross-database isolation this harness checks for.
+        let correctly_keyed = attached.attach_key.as_ref() == Some(&attached.written)
+            || (attached.attach_key.is_none() && case.main == attached.written);
+        if !correctly_keyed {
+            continue;
+        }
+        let dump = dump_native(&attached_paths[index], &attached.written);
+        assert!(
+            clean_read(&dump),
+            "SQLite3MC corrupted attached database {index}'s own {} file during an ATTACH session for {case:#?}: {}",
+            attached.written.cipher.name(),
+            describe(dump.iter().rev().take(3)),
+        );
+    }
+
+    remove(&main_path);
+    for path in &attached_paths {
+        remove(path);
+    }
+}
+
+/// Creates and keys a brand-new native-scheme file at `path` standalone, with `rows` rows in its
+/// own `t0` table, before anything else ever attaches it. Gives an [`AttachedDb`] real, known
+/// prior content so attaching it later with the wrong key, or an inherited one, is an actual
+/// mismatch and not just an empty file taking on whatever key first touches it.
+fn write_native(path: &Path, config: &NativeConfig, rows: usize) {
+    remove(path);
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(path),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a new {} file: {code:?}",
+            config.cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} file: {code:?}",
+            config.cipher.name()
+        );
+    }
+    if let Err(code) = connection.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
+        panic!(
+            "SQLite3MC refused to create a table in a new {} file: {code:?}",
+            config.cipher.name()
+        );
+    }
+    for i in 0..rows {
+        let row = i64::try_from(i).expect("row indices stay far below i64::MAX");
+        if let Err(code) =
+            connection.execute(c"INSERT INTO t0(i) VALUES (?1)", &[Param::Integer(row)])
+        {
+            panic!(
+                "SQLite3MC refused to insert into a new {} file: {code:?}",
+                config.cipher.name()
+            );
+        }
+    }
+}
+
+/// Attaches one [`AttachedDb`] to `connection` as `db1`/`db2` (`index` 0 or otherwise) and
+/// exercises it: an optional `VACUUM`, and, for the first attached database only, a
+/// cross-database copy from main and a detach/reattach cycle using its own true key. Everything
+/// after a failed `ATTACH` is skipped; every other step is tolerated to fail, a wrong or
+/// inherited key means they are expected to.
+fn exercise_attached(
+    connection: &Connection<'_>,
+    index: usize,
+    attached: &AttachedDb,
+    cross_copy: bool,
+    detach_reattach: bool,
+    path_str: &str,
+) {
+    let db_name = if index == 0 { "db1" } else { "db2" };
+    if !attach(connection, db_name, path_str, attached.attach_key.as_ref()) {
+        return;
+    }
+    if attached.vacuum {
+        let _ = connection.execute(&sql(&format!("VACUUM {db_name}")), &[]);
+    }
+    if index == 0 && cross_copy {
+        let _ = connection.execute(
+            &sql(&format!(
+                "INSERT INTO {db_name}.t0(i) SELECT i FROM main.t0"
+            )),
+            &[],
+        );
+    }
+    if index == 0
+        && detach_reattach
+        && connection
+            .execute(&sql(&format!("DETACH DATABASE {db_name}")), &[])
+            .is_ok()
+    {
+        attach(connection, db_name, path_str, Some(&attached.written));
+    }
+}
+
+/// Runs `ATTACH DATABASE path_str AS db_name`, staging `attach_key`'s cipher and supplying its
+/// key when given, omitting the `KEY` clause entirely otherwise (which SQLite3MC resolves by
+/// copying the main database's own current codec verbatim). Returns whether it succeeded.
+fn attach(
+    connection: &Connection<'_>,
+    db_name: &str,
+    path_str: &str,
+    attach_key: Option<&NativeConfig>,
+) -> bool {
+    let Some(stage_config) = attach_key else {
+        return connection
+            .execute(
+                &sql(&format!("ATTACH DATABASE ?1 AS {db_name}")),
+                &[Param::Text(path_str)],
+            )
+            .is_ok();
+    };
+    stage_cipher(connection, stage_config);
+    let key_bytes = native_key_bytes(
+        &stage_config.key,
+        stage_config
+            .cipher
+            .key_len(stage_config.aegis_algorithm_256),
+    );
+    connection
+        .execute(
+            &sql(&format!("ATTACH DATABASE ?1 AS {db_name} KEY ?2")),
+            &[Param::Text(path_str), Param::Blob(&key_bytes)],
+        )
+        .is_ok()
+}
+
 const fn api(side: Side) -> &'static Api {
     match side {
         Side::SqlCipher => &SQLCIPHER,
@@ -677,9 +921,10 @@ const fn aegis_algorithm(select_256: bool) -> c_int {
     }
 }
 
-/// Applies `config` and the key to SQLite3MC's own native scheme, returning only a refused key as
-/// an observation.
-fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Result<(), Code> {
+/// Sets every SQLite3MC cipher parameter `config` carries, without touching the key. The
+/// resulting pending state is consumed by whichever key-setup call runs next on this
+/// connection: [`Connection::key`], `ATTACH ... KEY`, or [`Connection::rekey`].
+fn stage_cipher(connection: &Connection<'_>, config: &NativeConfig) {
     let cipher_name = CString::new(config.cipher.name()).expect("cipher names have no NUL");
     let index = connection.sqlite3mc_cipher_index(&cipher_name);
     assert_eq!(
@@ -717,6 +962,12 @@ fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Resul
     if let Some(header) = config.plaintext_header_size {
         set(c"plaintext_header_size", c_int::from(header));
     }
+}
+
+/// Applies `config` and the key to SQLite3MC's own native scheme, returning only a refused key as
+/// an observation.
+fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Result<(), Code> {
+    stage_cipher(connection, config);
     connection.key(&native_key_bytes(
         &config.key,
         config.cipher.key_len(config.aegis_algorithm_256),
