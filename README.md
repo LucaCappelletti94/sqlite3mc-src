@@ -1,6 +1,7 @@
 # sqlite3mc-src
 
 [![CI](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/ci.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/ci.yml)
+[![ClusterFuzzLite](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/cflite_build.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/cflite_build.yml)
 [![Coverage](https://codecov.io/gh/LucaCappelletti94/sqlite3mc-src/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/sqlite3mc-src)
 [![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=LucaCappelletti94_sqlite3mc-src&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=LucaCappelletti94_sqlite3mc-src)
 [![crates.io](https://img.shields.io/crates/v/sqlite3mc-src.svg)](https://crates.io/crates/sqlite3mc-src)
@@ -21,4 +22,4 @@ SQLite3MC is MIT licensed. The amalgamation also carries public-domain code (SQL
 
 A daily workflow in the [repository](https://github.com/LucaCappelletti94/sqlite3mc-src) opens a pull request for each new SQLite3MC release, taking the archive's checksum only from the release's Sigstore-signed `SHA256SUMS`. CI re-runs `upgrade.sh`, which checks that signature again before trusting the pinned checksum, to prove the vendored bytes match the pinned release. It also compiles the packaged sources natively and through `sqlite-wasm-rs`, and checks that each build opens the other's files in every cipher, under Node and in headless Chrome and Firefox, on OPFS too.
 
-CI also runs SQLite3MC's own tests, a rekey of every cipher and SQLite's TCL suite through the shipped amalgamation, once plainly and once under the address and undefined-behaviour sanitizers, with every expected failure named and explained. A differential fuzzer in `fuzz/` reads and writes databases with the amalgamation's `sqlcipher` scheme and with [SQLCipher](https://www.zetetic.net/sqlcipher/) side by side, on every pull request and daily through ClusterFuzzLite.
+CI also runs SQLite3MC's own tests, a rekey of every cipher and SQLite's TCL suite through the shipped amalgamation, once plainly and once under the address and undefined-behaviour sanitizers, with every expected failure named and explained. Seven fuzz targets in `fuzz/` run on every pull request and daily through `ClusterFuzzLite`: a differential fuzzer comparing the amalgamation's `sqlcipher` scheme against [SQLCipher](https://www.zetetic.net/sqlcipher/) itself, a self-consistency check across the six native cipher schemes, and dedicated targets for rekeying, `journal_mode=WAL`, `ATTACH DATABASE`, the `sqlite3_backup_*` API, and shared-cache mode.

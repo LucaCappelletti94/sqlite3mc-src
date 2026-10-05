@@ -16,8 +16,9 @@ for name in $targets; do
     cp "$target_dir/$name" "$OUT/"
 done
 
-# cifuzz unpacks <target>_seed_corpus.zip before fuzzing.
-for dir in fuzz/corpus/*/; do
-    name=$(basename "$dir")
-    zip -j -q "$OUT/${name}_seed_corpus.zip" "$dir"*
+# cifuzz unpacks <target>_seed_corpus.zip before fuzzing. Only the real targets have one;
+# fuzz/corpus/findings holds panicking draws nothing replays, not a seed corpus to ship.
+for name in $targets; do
+    dir="fuzz/corpus/$name"
+    [ -d "$dir" ] && zip -j -q "$OUT/${name}_seed_corpus.zip" "$dir"/*
 done

@@ -286,9 +286,9 @@ impl<'a> Arbitrary<'a> for Case {
 
 /// Workload steps beyond this are ignored, bounding one execution's time. Shared by every input
 /// model that runs a workload, not just [`Case`].
-pub const MAX_OPS: usize = 64;
+pub(crate) const MAX_OPS: usize = 64;
 /// Flips beyond this are ignored. Shared the same way as [`MAX_OPS`].
-pub const MAX_FLIPS: usize = 16;
+pub(crate) const MAX_FLIPS: usize = 16;
 
 /// One of SQLite3MC's native cipher schemes, every one but `sqlcipher`.
 ///
@@ -619,7 +619,7 @@ pub struct WalCase {
     pub config: NativeConfig,
     /// `mc_legacy_wal`: `true` selects the older WAL frame encryption, which the project's own
     /// source comments recommend only for recovering journals written before version 1.3.0, not
-    /// for general use, having previously been capable of data loss after a crash.
+    /// for general use.
     pub legacy_wal: bool,
     /// Workload, at most [`MAX_OPS`] steps of it.
     pub ops: Vec<Op>,
@@ -632,9 +632,9 @@ pub struct WalCase {
 
 /// Attached databases beyond this are ignored, bounding one execution's file count. Shared the
 /// same way as [`MAX_OPS`].
-pub const MAX_ATTACHED: usize = 2;
+pub(crate) const MAX_ATTACHED: usize = 2;
 /// Rows inserted into any one database inside an [`AttachCase`] beyond this are ignored.
-pub const MAX_ATTACH_ROWS: usize = 8;
+pub(crate) const MAX_ATTACH_ROWS: usize = 8;
 
 /// One database an [`AttachCase`]'s main connection attaches alongside its own.
 #[derive(Debug, Clone, PartialEq, Eq, Arbitrary)]
@@ -727,7 +727,7 @@ pub struct BackupCase {
 }
 
 /// Connections beyond this, opened to the same file under shared-cache mode, are ignored.
-pub const MAX_SIBLINGS: usize = 3;
+pub(crate) const MAX_SIBLINGS: usize = 3;
 
 /// One sibling connection, opened to the same file `main` already created and populated under
 /// [`SharedCacheCase::written`]'s key, under shared-cache mode.

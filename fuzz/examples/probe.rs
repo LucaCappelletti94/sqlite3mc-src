@@ -1,3 +1,7 @@
+//! Manual smoke sweep over the differential target's writer/compatibility/KDF/HMAC axes, one
+//! fixed `Op::Create` each, run directly (not through libFuzzer) for a quick sanity check after a
+//! harness change. `cargo run --manifest-path fuzz/Cargo.toml --example probe`.
+
 use sqlite3mc_src_fuzz::{run, Algorithm, Case, Config, Key, Op, Side, Table};
 
 fn main() {

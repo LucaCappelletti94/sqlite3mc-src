@@ -300,10 +300,11 @@ pub fn run_rekey(case: &RekeyCase) {
         RekeyAction::Decrypt => Vec::new(),
     };
     // SQLite3MC consumes pending `sqlite3mc_config`/`sqlite3mc_config_cipher` state at every
-    // key-applying call, `sqlite3_rekey` included, not just the original `sqlite3_key`: a value
+    // key-applying call, `sqlite3_rekey` included, not just the original `sqlite3_key`. A value
     // staged only once, before the connection's first key, does not carry over to a later
-    // rekey. Re-stage immediately before this call, using the new key's own `kdf_iter` when it
-    // carries one (upstream issue #236 documents the same requirement for `PRAGMA` sequences).
+    // rekey, so re-stage immediately before this call, using the new key's own `kdf_iter` when
+    // it carries one (`utelle/SQLite3MultipleCiphers` issue #236 documents the same requirement
+    // for `PRAGMA` sequences).
     let mut rekey_config = case.config.clone();
     if let RekeyAction::ChangeKey(new_key) = &case.action {
         rekey_config.key = new_key.clone();
@@ -667,8 +668,8 @@ fn exercise_attached(
 /// refuses the pair, there is nothing further to check: that is the guard working as intended.
 /// When it lets the pair through and the backup reports full success, the destination must still
 /// reopen cleanly with its own true key: `sqlite3_backup_step`/`_finish` reporting success for a
-/// destination that cannot actually be read back is exactly the defect issue #158 described, and
-/// exactly what this harness exists to catch a recurrence of.
+/// destination that cannot actually be read back is exactly the defect `utelle/SQLite3MultipleCiphers`
+/// issue #158 described, and exactly what this harness exists to catch a recurrence of.
 ///
 /// # Panics
 ///
@@ -1443,7 +1444,7 @@ fn compare(case: &Case, file: &str, a: Side, a_log: &[Record], b: Side, b_log: &
     );
 }
 
-/// SQLCipher 4.19.0 zero-fills a page failing its HMAC (upstream/sqlcipher-swallowed-hmac-failure.md).
+/// SQLCipher 4.19.0 zero-fills a page that fails its HMAC check instead of reporting the failure.
 fn swallowed_hmac_failure(
     at: usize,
     plaintext_header: bool,

@@ -14,7 +14,7 @@ use crate::ffi::{
 
 /// An SQLite primary result code, the low byte of an extended one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Code(pub i32);
+pub(crate) struct Code(pub(crate) i32);
 
 impl Code {
     const fn of(rc: c_int) -> Self {
@@ -32,7 +32,7 @@ const fn check(rc: c_int) -> Result<(), Code> {
 
 /// A column value as SQLite stored it, with floats compared bit for bit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
+pub(crate) enum Value {
     /// `NULL`.
     Null,
     /// An integer.
