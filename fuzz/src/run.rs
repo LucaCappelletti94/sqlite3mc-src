@@ -3,11 +3,11 @@
 use core::ffi::{c_int, CStr};
 use std::{
     ffi::CString,
-    fmt::Write as _,
+    fmt::{Debug, Write as _},
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard},
 };
 
 use crate::{
@@ -46,17 +46,8 @@ const CIPHER_PAGE1_OFFSET: usize = 24;
 ///
 /// On a divergence, or when a library refuses a setting or step the harness generates as valid.
 pub fn run(case: &Case) {
-    // SQLCipher is compiled with no-op mutexes, and every execution reuses one directory.
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    // A case-derived seed, so the same case always draws the same salts and IVs on replay, but
-    // different cases are not forced to start from the identical stream.
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("clean.db");
@@ -140,16 +131,8 @@ fn clean_read(log: &[Record]) -> bool {
 ///
 /// When SQLite3MC refuses a setting or step the harness generates as valid, or an oracle fails.
 pub fn run_native(case: &NativeCase) {
-    // SQLCipher is compiled with no-op mutexes, and every execution reuses one directory; the
-    // native target never touches SQLCipher, but shares the directory and its serialization.
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("native-clean.db");
@@ -158,23 +141,7 @@ pub fn run_native(case: &NativeCase) {
     remove(&damaged);
 
     let cipher = case.config.cipher;
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(&clean),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} database: {code:?}",
-            cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, &case.config) {
-        panic!(
-            "SQLite3MC refused the key of a new {} database: {code:?}",
-            cipher.name()
-        );
-    }
+    let connection = open_native(&clean, &case.config, "database");
     run_workload(&connection, "SQLite3MC", &case.ops, case);
     drop(connection);
 
@@ -262,36 +229,14 @@ fn dump_native(path: &Path, config: &NativeConfig) -> Vec<Record> {
 /// valid, or an oracle fails.
 pub fn run_rekey(case: &RekeyCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("rekey.db");
     remove(&clean);
 
     let cipher = case.config.cipher;
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(&clean),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} database: {code:?}",
-            cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, &case.config) {
-        panic!(
-            "SQLite3MC refused the key of a new {} database: {code:?}",
-            cipher.name()
-        );
-    }
+    let connection = open_native(&clean, &case.config, "database");
     run_workload(&connection, "SQLite3MC", &case.ops_before, case);
 
     let key_len = cipher.key_len(case.config.aegis_algorithm_256);
@@ -370,36 +315,14 @@ pub fn run_rekey(case: &RekeyCase) {
 /// When SQLite3MC refuses a setting or step the harness generates as valid, or the oracle fails.
 pub fn run_wal(case: &WalCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("wal.db");
     remove(&clean);
 
     let cipher = case.config.cipher;
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(&clean),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} database: {code:?}",
-            cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, &case.config) {
-        panic!(
-            "SQLite3MC refused the key of a new {} database: {code:?}",
-            cipher.name()
-        );
-    }
+    let connection = open_native(&clean, &case.config, "database");
     let legacy_wal = c_int::from(case.legacy_wal);
     assert_eq!(
         connection.sqlite3mc_config(c"mc_legacy_wal", legacy_wal),
@@ -465,13 +388,7 @@ pub fn run_wal(case: &WalCase) {
 /// file fails to read back cleanly afterward.
 pub fn run_attach(case: &AttachCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let main_path = dir.join("attach-main.db");
@@ -493,23 +410,7 @@ pub fn run_attach(case: &AttachCase) {
     }
 
     let main_cipher = case.main.cipher;
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(&main_path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} main database: {code:?}",
-            main_cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, &case.main) {
-        panic!(
-            "SQLite3MC refused the key of a new {} main database: {code:?}",
-            main_cipher.name()
-        );
-    }
+    let connection = open_native(&main_path, &case.main, "main database");
     if let Err(code) = connection.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
         panic!(
             "SQLite3MC refused to create main's own {} table: {code:?}",
@@ -586,23 +487,7 @@ pub fn run_attach(case: &AttachCase) {
 /// mismatch and not just an empty file taking on whatever key first touches it.
 fn write_native(path: &Path, config: &NativeConfig, rows: usize) {
     remove(path);
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a new {} file: {code:?}",
-            config.cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, config) {
-        panic!(
-            "SQLite3MC refused the key of a new {} file: {code:?}",
-            config.cipher.name()
-        );
-    }
+    let connection = open_native(path, config, "file");
     if let Err(code) = connection.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
         panic!(
             "SQLite3MC refused to create a table in a new {} file: {code:?}",
@@ -677,13 +562,7 @@ fn exercise_attached(
 /// allowed and that reported full success leaves an unreadable destination.
 pub fn run_backup(case: &BackupCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     let dir = WORKDIR.as_path();
     let src_path = dir.join("backup-src.db");
@@ -724,23 +603,7 @@ fn open_for_backup<'a>(
     page_size: Option<PageSize>,
     ops: &[Op],
 ) -> Connection<'a> {
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} file: {code:?}",
-            config.cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&connection, config) {
-        panic!(
-            "SQLite3MC refused the key of a new {} file: {code:?}",
-            config.cipher.name()
-        );
-    }
+    let connection = open_native(path, config, "file");
     if let Some(page_size) = page_size {
         let text = sql(&format!("PRAGMA page_size={}", page_size.get()));
         if let Err(code) = connection.execute(&text, &[]) {
@@ -799,13 +662,7 @@ fn attach(
 /// file itself fails to read back cleanly under its one true key once every connection closes.
 pub fn run_shared_cache(case: &SharedCacheCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    let _serial = begin_run(&SERIAL, case);
 
     crate::db::enable_shared_cache(&SQLITE3MC, true)
         .expect("SQLite3MC accepts sqlite3_enable_shared_cache(1)");
@@ -815,23 +672,7 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
     remove(&path);
 
     let cipher = case.written.cipher;
-    let main = Connection::open(
-        &SQLITE3MC,
-        &c_path(&path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} shared-cache database: {code:?}",
-            cipher.name()
-        )
-    });
-    if let Err(code) = configure_native(&main, &case.written) {
-        panic!(
-            "SQLite3MC refused the key of a new {} shared-cache database: {code:?}",
-            cipher.name()
-        );
-    }
+    let main = open_native(&path, &case.written, "shared-cache database");
     if let Err(code) = main.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
         panic!(
             "SQLite3MC refused to create main's own {} table: {code:?}",
@@ -904,6 +745,20 @@ static WORKDIR: LazyLock<PathBuf> = LazyLock::new(|| {
     fs::create_dir_all(&dir).expect("the work directory can be created");
     dir
 });
+
+/// Locks `serial` and reseeds the deterministic entropy stream from `case`, so the same case
+/// always draws the same salts and IVs on replay, but different cases are not forced to start
+/// from the identical stream. The returned guard must stay alive for the whole run, SQLCipher is
+/// compiled with no-op mutexes and every execution reuses one directory.
+fn begin_run<'a>(serial: &'a Mutex<()>, case: &impl Debug) -> MutexGuard<'a, ()> {
+    let guard = serial
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
+    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
+    guard
+}
 
 fn remove(db: &Path) {
     for suffix in ["", "-journal", "-wal", "-shm"] {
@@ -1170,6 +1025,31 @@ fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Resul
         &config.key,
         config.cipher.key_len(config.aegis_algorithm_256),
     ))
+}
+
+/// Opens a new SQLite3MC file at `path` and applies `config`'s cipher and key, panicking with
+/// `what` (e.g. `"file"`, `"main database"`) naming the file in the message if SQLite3MC refuses
+/// to create or key it.
+fn open_native<'a>(path: &Path, config: &NativeConfig, what: &str) -> Connection<'a> {
+    let cipher = config.cipher;
+    let connection = Connection::open(
+        &SQLITE3MC,
+        &c_path(path),
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+    )
+    .unwrap_or_else(|code| {
+        panic!(
+            "SQLite3MC cannot create a {} {what}: {code:?}",
+            cipher.name()
+        )
+    });
+    if let Err(code) = configure_native(&connection, config) {
+        panic!(
+            "SQLite3MC refused the key of a new {} {what}: {code:?}",
+            cipher.name()
+        );
+    }
+    connection
 }
 
 /// Bytes from a xorshift generator, so a blob is incompressible and unlike its neighbours.

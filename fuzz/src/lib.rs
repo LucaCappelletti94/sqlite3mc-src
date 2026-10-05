@@ -12,6 +12,7 @@ mod entropy;
 mod ffi;
 mod input;
 mod run;
+pub mod seedgen;
 
 pub use input::{
     Algorithm, AttachCase, BackupCase, Case, Checkpoint, Cipher, Config, Key, NativeCase,
