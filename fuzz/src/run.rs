@@ -19,7 +19,8 @@ use crate::{
     input::{
         Algorithm, AttachCase, AttachedDb, BackupCase, Case, Cell, Cipher, Column, Config, Key,
         NativeCase, NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, SharedCacheCase,
-        Side, Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS, MAX_SIBLINGS,
+        SiblingKey, Side, Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
+        MAX_SIBLINGS,
     },
 };
 
@@ -653,13 +654,14 @@ fn attach(
 /// Runs `case` against SQLite3MC's handling of shared-cache mode.
 ///
 /// A main connection creates and populates a database, then up to [`MAX_SIBLINGS`] further
-/// connections open the *same* file under shared-cache mode, each with their own cipher and key.
+/// connections open the *same* file under shared-cache mode, each keying it with `main`'s own
+/// configuration or one of its own.
 ///
 /// # Panics
 ///
 /// When SQLite3MC refuses a setting or step the harness generates as valid, when `main`'s own
-/// read fails after a sibling connects despite `main` never changing its own key, or when the
-/// file itself fails to read back cleanly under its one true key once every connection closes.
+/// read fails after siblings keyed with the same configuration connect, or when the file itself
+/// fails to read back cleanly under its one true key once every connection closes.
 pub fn run_shared_cache(case: &SharedCacheCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = begin_run(&SERIAL, case);
@@ -682,6 +684,7 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
     run_workload(&main, "SQLite3MC", &case.main_ops, case);
 
     let mut siblings = Vec::with_capacity(case.siblings.len().min(MAX_SIBLINGS));
+    let mut one_key = true;
     for sibling in case.siblings.iter().take(MAX_SIBLINGS) {
         let Ok(connection) = Connection::open(
             &SQLITE3MC,
@@ -690,19 +693,28 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
         ) else {
             continue;
         };
-        let _ = configure_native(&connection, &sibling.config);
+        let config = match &sibling.key {
+            SiblingKey::Shared => &case.written,
+            SiblingKey::Own(config) => {
+                one_key &= *config == case.written;
+                config
+            }
+        };
+        let _ = configure_native(&connection, config);
         run_workload_tolerant(&connection, &sibling.ops);
         siblings.push(connection);
     }
 
-    if let Err(code) = main.execute(c"SELECT count(*) FROM sqlite_schema", &[]) {
-        panic!(
-            "SQLite3MC's main connection, still keyed with its own correct {} key, could not \
-             read its own shared-cache database after {} sibling connection(s) opened the same \
-             file for {case:#?}: {code:?}",
-            cipher.name(),
-            siblings.len(),
-        );
+    if one_key {
+        if let Err(code) = main.execute(c"SELECT count(*) FROM sqlite_schema", &[]) {
+            panic!(
+                "SQLite3MC's main connection could not read its own {} shared-cache database \
+                 after {} sibling connection(s) keyed the same file identically for {case:#?}: \
+                 {code:?}",
+                cipher.name(),
+                siblings.len(),
+            );
+        }
     }
 
     drop(siblings);

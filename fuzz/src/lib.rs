@@ -16,6 +16,6 @@ pub mod seedgen;
 
 pub use input::{
     Algorithm, AttachCase, BackupCase, Case, Checkpoint, Cipher, Config, Key, NativeCase,
-    NativeKey, Op, RekeyAction, RekeyCase, SharedCacheCase, Side, Table, WalCase,
+    NativeKey, Op, RekeyAction, RekeyCase, SharedCacheCase, SiblingKey, Side, Table, WalCase,
 };
 pub use run::{run, run_attach, run_backup, run_native, run_rekey, run_shared_cache, run_wal};
