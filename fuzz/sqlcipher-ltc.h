@@ -1,4 +1,4 @@
-/* SQLCipher's one LibTomCrypt configuration, shared by every SQLCipher and LibTomCrypt unit so struct layouts agree. */
+/* The LibTomCrypt configuration SQLCipher and every libtomcrypt source in the unit share. */
 #ifndef SQLCIPHER_LTC_H
 #define SQLCIPHER_LTC_H
 

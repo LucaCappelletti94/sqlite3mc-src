@@ -8,17 +8,11 @@ use std::{
     process::Command,
 };
 
-/// One compiler invocation of a side, its objects merge before the rename.
-struct Unit<'a> {
-    files: &'a [PathBuf],
-    includes: &'a [PathBuf],
-    defines: &'a [(&'a str, Option<&'a str>)],
-    forced_include: Option<&'a str>,
-}
-
 struct Side<'a> {
     prefix: &'a str,
-    units: &'a [Unit<'a>],
+    source: PathBuf,
+    includes: &'a [&'a Path],
+    defines: &'a [(&'a str, Option<&'a str>)],
 }
 
 fn main() {
@@ -28,60 +22,34 @@ fn main() {
         "the symbol renaming needs ELF objects and GNU-compatible nm and objcopy, so the fuzz crate builds on Linux only"
     );
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let crate_dir =
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
-    let mc_dir = sqlite3mc_src::source_dir().to_path_buf();
-    let sc_dir = sqlcipher_src::source_dir().to_path_buf();
-    let ltc_dir = sc_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR);
+    let mc_dir = sqlite3mc_src::source_dir();
+    let sc_dir = sqlcipher_src::source_dir();
     let common = [
         ("SQLITE_TEMP_STORE", Some("2")),
         ("SQLITE_ENABLE_DBPAGE_VTAB", None),
         ("SQLITE_DEFAULT_MEMSTATUS", Some("0")),
     ];
-    let mc_defines: Vec<(&str, Option<&str>)> =
-        [common.as_slice(), &[("SQLITE_CORE", None)]].concat();
-    let ltc_files: Vec<PathBuf> = std::iter::once("sqlcipher-entropy.c")
-        .map(|name| crate_dir.join(name))
-        .chain(
-            sqlcipher_src::LIBTOMCRYPT_SOURCES
-                .iter()
-                .map(|source| sc_dir.join(source)),
-        )
-        .collect();
-    let mc_files = [mc_dir.join(sqlite3mc_src::SOURCE_FILE)];
-    let mc_includes = [mc_dir];
-    let wrapper_files = [crate_dir.join("sqlcipher-wrapper.c")];
-    let wrapper_includes = [sc_dir, ltc_dir.clone()];
-    let ltc_includes = [ltc_dir, crate_dir];
+    let mc_defines = [common.as_slice(), &[("SQLITE_CORE", None)]].concat();
     build(
         &Side {
             prefix: "mc",
-            units: &[Unit {
-                files: &mc_files,
-                includes: &mc_includes,
-                defines: &mc_defines,
-                forced_include: None,
-            }],
+            source: mc_dir.join(sqlite3mc_src::SOURCE_FILE),
+            includes: &[mc_dir],
+            defines: &mc_defines,
         },
         &out,
     );
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     build(
         &Side {
             prefix: "sc",
-            units: &[
-                Unit {
-                    files: &wrapper_files,
-                    includes: &wrapper_includes,
-                    defines: &common,
-                    forced_include: None,
-                },
-                Unit {
-                    files: &ltc_files,
-                    includes: &ltc_includes,
-                    defines: &[("LTC_SOURCE", None)],
-                    forced_include: Some("sqlcipher-ltc.h"),
-                },
+            source: sqlcipher_unit(crate_dir, sc_dir, &out),
+            includes: &[
+                sc_dir,
+                &sc_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR),
+                crate_dir,
             ],
+            defines: &common,
         },
         &out,
     );
@@ -90,81 +58,69 @@ fn main() {
         println!("cargo:rustc-link-lib={lib}");
     }
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=sqlcipher-wrapper.c");
-    println!("cargo:rerun-if-changed=sqlcipher-entropy.c");
-    println!("cargo:rerun-if-changed=sqlcipher-ltc.h");
+    for file in [
+        "sqlcipher-wrapper.c",
+        "sqlcipher-ltc.h",
+        "sqlcipher-entropy.c",
+    ] {
+        println!("cargo:rerun-if-changed={file}");
+    }
     println!("cargo:rerun-if-env-changed=NM");
     println!("cargo:rerun-if-env-changed=OBJCOPY");
-    println!("cargo:rerun-if-env-changed=LD");
-    println!("cargo:rerun-if-env-changed=AR");
 }
 
 fn build(side: &Side<'_>, out: &Path) {
-    let mut objects = Vec::new();
-    for unit in side.units {
-        for file in unit.files {
-            println!("cargo:rerun-if-changed={}", file.display());
-        }
-        let mut cc = cc::Build::new();
-        for file in unit.files {
-            cc.file(file);
-        }
-        for dir in unit.includes {
-            cc.include(dir);
-        }
-        cc.warnings(false);
-        for (name, value) in unit.defines {
-            cc.define(name, *value);
-        }
-        if let Some(header) = unit.forced_include {
-            cc.flag("-include").flag(header);
-        }
-        instrument(&mut cc);
-        let unit_objects = cc.compile_intermediates();
-        assert_eq!(
-            unit_objects.len(),
-            unit.files.len(),
-            "{} compiled to {} objects",
-            unit.files[0].display(),
-            unit_objects.len()
-        );
-        objects.extend(unit_objects);
+    let mut cc = cc::Build::new();
+    cc.file(&side.source).warnings(false);
+    for include in side.includes {
+        println!("cargo:rerun-if-changed={}", include.display());
+        cc.include(include);
     }
-
-    let combined = if objects.len() == 1 {
-        objects.remove(0)
-    } else {
-        // Clang's .group sections break the final link once a partial link merges them.
-        let linked: Vec<PathBuf> = objects
-            .iter()
-            .map(|object| strip_group_sections(object))
-            .collect();
-        let combined = out.join(format!("{}.combined.o", side.prefix));
-        // The per-global asan sections survive a bfd partial link, while a gold one
-        // drops most of them and ASan then never registers the side's globals.
-        run(Command::new(tool("LD", "ld"))
-            .arg("-r")
-            .arg("-o")
-            .arg(&combined)
-            .args(&linked));
-        combined
+    for (name, value) in side.defines {
+        cc.define(name, *value);
+    }
+    instrument(&mut cc);
+    let objects = cc.compile_intermediates();
+    let [object] = objects.as_slice() else {
+        panic!(
+            "{} compiled to {} objects",
+            side.source.display(),
+            objects.len()
+        );
     };
 
     let map = out.join(format!("{}.redefine", side.prefix));
-    fs::write(&map, redefinitions(&combined, side.prefix)).expect("OUT_DIR is writable");
+    fs::write(&map, redefinitions(object, side.prefix)).expect("OUT_DIR is writable");
     let renamed = out.join(format!("{}.o", side.prefix));
     run(Command::new(tool("OBJCOPY", "objcopy"))
         .arg(format!("--redefine-syms={}", map.display()))
-        .arg(&combined)
+        .arg(object)
         .arg(&renamed));
 
     let archive = out.join(format!("lib{}.a", side.prefix));
     let _ = fs::remove_file(&archive);
-    run(Command::new(tool("AR", "ar"))
-        .arg("crs")
-        .arg(&archive)
-        .arg(&renamed));
+    run(cc.get_archiver().arg("crs").arg(&archive).arg(&renamed));
     println!("cargo:rustc-link-lib=static={}", side.prefix);
+}
+
+/// Writes the one translation unit SQLCipher builds from, the wrapper's configuration and SQLCipher, then every
+/// libtomcrypt source in order, then the entropy hook, all sharing one configuration as upstream's single-file
+/// libtomcrypt does.
+fn sqlcipher_unit(crate_dir: &Path, sc_dir: &Path, out: &Path) -> PathBuf {
+    let sources = std::iter::once(crate_dir.join("sqlcipher-wrapper.c"))
+        .chain(
+            sqlcipher_src::LIBTOMCRYPT_SOURCES
+                .iter()
+                .map(|source| sc_dir.join(source)),
+        )
+        .chain(std::iter::once(crate_dir.join("sqlcipher-entropy.c")));
+    let unit = sources.fold(String::new(), |mut unit, source| {
+        let _ = writeln!(unit, "#include \"{}\"", source.display());
+        unit
+    });
+    let path = out.join("sqlcipher-unit.c");
+    fs::write(&path, unit).expect("OUT_DIR is writable");
+    path
 }
 
 /// Gives the C side the coverage and sanitizer instrumentation `cargo fuzz` gives the Rust side.
@@ -195,17 +151,6 @@ fn redefinitions(object: &Path, prefix: &str) -> String {
             let _ = writeln!(map, "{name} {prefix}_{name}");
             map
         })
-}
-
-/// Returns a copy of `object` without its `.group` section.
-fn strip_group_sections(object: &Path) -> PathBuf {
-    let stem = object.file_stem().expect("object has a stem");
-    let stripped = object.with_file_name(format!("{}.ng.o", stem.to_string_lossy()));
-    run(Command::new(tool("OBJCOPY", "objcopy"))
-        .arg("--remove-section=.group")
-        .arg(object)
-        .arg(&stripped));
-    stripped
 }
 
 fn tool(var: &str, default: &str) -> String {

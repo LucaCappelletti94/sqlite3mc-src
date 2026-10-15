@@ -1,4 +1,4 @@
-/* SQLCipher with its LibTomCrypt provider, whose sources build as separate units with the same configuration. */
+/* SQLCipher's configuration, heading the one unit build.rs assembles with libtomcrypt and the entropy hook. */
 #define SQLITE_HAS_CODEC 1
 #define SQLCIPHER_CRYPTO_LIBTOMCRYPT 1
 /* Installs the entropy hook before SQLCipher's own init runs. */
@@ -13,5 +13,6 @@
 #define SQLITE_THREADSAFE 1
 #define SQLITE_MUTEX_NOOP 1
 
+#define LTC_SOURCE
 #include "sqlcipher-ltc.h"
 #include "sqlcipher.c"
