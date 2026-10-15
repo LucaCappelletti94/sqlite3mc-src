@@ -1,5 +1,5 @@
 //! Replaces libc's `getentropy`, the call SQLCipher's RNG makes directly (`sqlcipher_wasm_rng` in
-//! `WASM_SOURCE_FILE`), with a deterministic stream reset once per [`run`](crate::run::run) call, so
+//! `sqlcipher-entropy.c`), with a deterministic stream reset once per [`run`](crate::run::run) call, so
 //! the same [`Case`](crate::Case) produces the same salts and IVs on every repeat, not just the same
 //! workload. SQLite3MC's own RNG reads `/dev/urandom` first and falls back to `getentropy` only if
 //! that open fails, so this does not make SQLite3MC's own writes deterministic; it is enough for any

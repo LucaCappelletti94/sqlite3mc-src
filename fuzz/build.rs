@@ -11,7 +11,7 @@ use std::{
 struct Side<'a> {
     prefix: &'a str,
     source: PathBuf,
-    include: &'a Path,
+    includes: &'a [&'a Path],
     defines: &'a [(&'a str, Option<&'a str>)],
 }
 
@@ -34,16 +34,21 @@ fn main() {
         &Side {
             prefix: "mc",
             source: mc_dir.join(sqlite3mc_src::SOURCE_FILE),
-            include: mc_dir,
+            includes: &[mc_dir],
             defines: &mc_defines,
         },
         &out,
     );
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     build(
         &Side {
             prefix: "sc",
-            source: sc_dir.join(sqlcipher_src::WASM_SOURCE_FILE),
-            include: sc_dir,
+            source: sqlcipher_unit(crate_dir, sc_dir, &out),
+            includes: &[
+                sc_dir,
+                &sc_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR),
+                crate_dir,
+            ],
             defines: &common,
         },
         &out,
@@ -53,14 +58,24 @@ fn main() {
         println!("cargo:rustc-link-lib={lib}");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    for file in [
+        "sqlcipher-wrapper.c",
+        "sqlcipher-ltc.h",
+        "sqlcipher-entropy.c",
+    ] {
+        println!("cargo:rerun-if-changed={file}");
+    }
     println!("cargo:rerun-if-env-changed=NM");
     println!("cargo:rerun-if-env-changed=OBJCOPY");
 }
 
 fn build(side: &Side<'_>, out: &Path) {
-    println!("cargo:rerun-if-changed={}", side.include.display());
     let mut cc = cc::Build::new();
-    cc.file(&side.source).include(side.include).warnings(false);
+    cc.file(&side.source).warnings(false);
+    for include in side.includes {
+        println!("cargo:rerun-if-changed={}", include.display());
+        cc.include(include);
+    }
     for (name, value) in side.defines {
         cc.define(name, *value);
     }
@@ -86,6 +101,26 @@ fn build(side: &Side<'_>, out: &Path) {
     let _ = fs::remove_file(&archive);
     run(cc.get_archiver().arg("crs").arg(&archive).arg(&renamed));
     println!("cargo:rustc-link-lib=static={}", side.prefix);
+}
+
+/// Writes the one translation unit SQLCipher builds from, the wrapper's configuration and SQLCipher, then every
+/// libtomcrypt source in order, then the entropy hook, all sharing one configuration as upstream's single-file
+/// libtomcrypt does.
+fn sqlcipher_unit(crate_dir: &Path, sc_dir: &Path, out: &Path) -> PathBuf {
+    let sources = std::iter::once(crate_dir.join("sqlcipher-wrapper.c"))
+        .chain(
+            sqlcipher_src::LIBTOMCRYPT_SOURCES
+                .iter()
+                .map(|source| sc_dir.join(source)),
+        )
+        .chain(std::iter::once(crate_dir.join("sqlcipher-entropy.c")));
+    let unit = sources.fold(String::new(), |mut unit, source| {
+        let _ = writeln!(unit, "#include \"{}\"", source.display());
+        unit
+    });
+    let path = out.join("sqlcipher-unit.c");
+    fs::write(&path, unit).expect("OUT_DIR is writable");
+    path
 }
 
 /// Gives the C side the coverage and sanitizer instrumentation `cargo fuzz` gives the Rust side.
