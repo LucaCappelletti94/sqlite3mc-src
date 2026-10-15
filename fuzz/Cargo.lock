@@ -115,9 +115,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sqlcipher-src"
-version = "419.0.4+sqlcipher-4.19.0-sqlite-3.53.4-libtomcrypt-1.18.2"
+version = "419.0.5+sqlcipher-4.19.0-sqlite-3.53.4-libtomcrypt-1.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d983a7f69ae93370d5101e82b9442dce8c4e510977d97374c3e668d6dff32d08"
+checksum = "426c6ad3a422e1c3367060737b9590d7ab56459829535f9ad843979b548b2acb"
 
 [[package]]
 name = "sqlite3mc-src"
