@@ -558,9 +558,9 @@ fn exercise_attached(
 /// cleanly with the destination's own true key after the backup reports full success. A failure
 /// there is the defect `utelle/SQLite3MultipleCiphers` issue #158 described, and exactly what this
 /// harness exists to catch a recurrence of. The one identically laid out pair exempt is a
-/// destination that hides its page size and is sized below 4096-byte pages by `PRAGMA page_size`
-/// alone, which SQLite3MC cannot reopen at all, backup or not
-/// (`upstream/sqlite3mc-rc4-short-read-skips-decryption.md`).
+/// destination that hides its page size and has `PRAGMA page_size` below the page size SQLite3MC
+/// assumes on reopen, `legacy_page_size` or 4096 bytes, which it cannot reopen at all, backup or
+/// not (`upstream/sqlite3mc-rc4-short-read-skips-decryption.md`).
 ///
 /// # Panics
 ///
@@ -587,8 +587,9 @@ pub fn run_backup(case: &BackupCase) {
             && case.src_page_size == case.dest_page_size
             && case.src.same_layout(&case.dest)
             && !(case.dest.hides_page_size()
-                && case.dest.page_size.is_none()
-                && case.dest_page_size.is_some_and(|size| size.get() < 4096))
+                && case
+                    .dest_page_size
+                    .is_some_and(|size| size.get() < case.dest.page_size.unwrap_or(4096)))
         {
             drop(src);
             drop(dest);
