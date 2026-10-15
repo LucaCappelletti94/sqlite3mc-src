@@ -121,7 +121,7 @@ checksum = "d983a7f69ae93370d5101e82b9442dce8c4e510977d97374c3e668d6dff32d08"
 
 [[package]]
 name = "sqlite3mc-src"
-version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
+version = "206.1.0+sqlite3mc-2.6.1-sqlite-3.54.0"
 
 [[package]]
 name = "sqlite3mc-src-fuzz"

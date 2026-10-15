@@ -4,4 +4,4 @@ version = 3
 
 [[package]]
 name = "sqlite3mc-src"
-version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
+version = "206.1.0+sqlite3mc-2.6.1-sqlite-3.54.0"
