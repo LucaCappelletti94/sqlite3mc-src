@@ -19,14 +19,11 @@ memsubsys2-4.1           SQLite3MC's cipher tables stay allocated between sqlite
 memsubsys2-4.3           SQLite3MC's cipher tables stay allocated between sqlite3_initialize and sqlite3_shutdown
 memsubsys2-4.4           SQLite3MC's cipher tables stay allocated between sqlite3_initialize and sqlite3_shutdown
 memsubsys2-4.11          SQLite3MC's cipher tables stay allocated between sqlite3_initialize and sqlite3_shutdown
-backup2-10               mcIoRead drops read errors of the real file, fixed by SQLite3MC pull request 272 after 2.5.1
 EOF
 )
 # SQLite test files that crash through a named SQLite3MC defect, each with its reason.
 EXPECTED_CRASHES=$(cat <<'EOF'
-init       sqlite3mcRegisterCipher writes through an unchecked sqlite3_malloc when an allocation fails
-quota      sqlite3mcCloneCodecParameterTable writes through an unchecked sqlite3_malloc when an allocation fails
-multiplex  sqlite3mcCloneCodecParameterTable writes through an unchecked sqlite3_malloc when an allocation fails
+shared9    2.6.0's temp-file encryption stores the opening connection in the shared pager, which outlives that connection
 EOF
 )
 # SQLite test files not run, each with its reason.
@@ -45,6 +42,9 @@ if [ -n "${SANITIZE:-}" ]; then
 crash8  its simulated crashes end child processes holding memory, which LeakSanitizer reports on SQLite alone too
 EOF
 )
+    # Plain builds read shared9's freed connection handle there without faulting.
+    EXPECTED_CRASHES=$(printf '%s\n%s' "$EXPECTED_CRASHES" \
+        "vtab_shared  reads shared9's freed connection handle, which only the sanitizer catches")
 fi
 
 # A clean sanitizer run only counts if the binary is really instrumented.
@@ -76,9 +76,11 @@ git -C "$WORK/mc" fetch --quiet --depth 1 https://github.com/utelle/SQLite3Multi
 git -C "$WORK/mc" archive "$commit" test | tar x -C "$WORK/mc"
 failed=""
 # Upstream never checks the output, so its results, without the echoed script lines, are compared here.
+# Their mc_* information pragmas name the host CPU's features, so their lines are dropped from each script.
 while read -r name db script; do
     echo "== $name"
-    (cd "$WORK/mc" && "$WORK/sqlite3mc" "$db" ".read test/$script" 2>&1 | grep -vxF -f "test/$script") || true
+    grep -viE '^pragma mc_(aes_info|chacha20_hwaccel|cpu_info)\b' "$WORK/mc/test/$script" > "$WORK/mc/test/host-free.sql"
+    (cd "$WORK/mc" && "$WORK/sqlite3mc" "$db" ".read test/host-free.sql" 2>&1 | grep -vxF -f test/host-free.sql) || true
 done > "$WORK/sqlite3mc.out" <<'EOF'
 test1          test1.db3                          test1.sql
 test2          test2.db3                          test2.sql
@@ -151,17 +153,10 @@ awk '$1 == "F" { print $3 " *" $2; print "file " $2 }' manifest | sort | cmp -s 
 # TCL_LIB names the tclConfig.sh directory when configure cannot find it.
 CC="$CC" ./configure ${TCL_LIB:+--with-tcl="$TCL_LIB"} > configure.log
 make sqlite3.c > make.log
-# testfixture reaches SQLite internals through -DSQLITE_PRIVATE="", which the shipped amalgamation rejects by
-# defining sqlite3mcCodecAttach static against its SQLITE_PRIVATE declaration. The copy drops that one static,
-# as SQLite3MC pull request 276 proposes, and the run stops once a release no longer carries it.
-line=$(grep -n -x 'sqlite3mcCodecAttach(sqlite3\* db, int nDb, const char\* zPath, const void\* zKey, int nKey)' "$SHIPPED" | cut -d: -f1)
-if [ -z "$line" ] || [ "$(sed -n "$((line - 1))p" "$SHIPPED")" != "static int" ]; then
-    echo "sqlite3mcCodecAttach is no longer defined static, so drop its edit from suite/run.sh" >&2
-    exit 1
-fi
-sed "$((line - 1))s/^static int$/SQLITE_PRIVATE int/" "$SHIPPED" > sqlite3.c
-[ "$(diff "$SHIPPED" sqlite3.c | grep -c '^[<>]')" -eq 2 ] || { echo "the testfixture copy differs by more than one line" >&2; exit 1; }
-make testfixture CC="$CC" CFLAGS="$OPT" LDFLAGS="${SANITIZE:+$OPT}" > testfixture.log 2>&1
+cp "$SHIPPED" sqlite3.c
+# The test sources fit their temp-store expectations to the compile-time SQLITE_TEMP_STORE, so they see the amalgamation's.
+temp_store=$(awk '/^#ifndef SQLITE_TEMP_STORE$/{getline; print $3; exit}' "$SHIPPED")
+make testfixture CC="$CC" CFLAGS="$OPT ${temp_store:+-DSQLITE_TEMP_STORE=$temp_store}" LDFLAGS="${SANITIZE:+$OPT}" > testfixture.log 2>&1
 instrumented testfixture
 printf 'sqlite3 db :memory:\nputs [db one {SELECT sqlite3mc_version()}]\n' > probe.tcl
 # A testfixture that cannot open a database runs no test, so its own report ends the run.
@@ -169,9 +164,9 @@ tested=$(./testfixture probe.tcl) || { echo "Failed:$failed testfixture" >&2; ex
 echo "Testing $tested with SQLite's veryquick suite"
 
 skips=$(echo "$SKIP_FILES" | awk 'NF { printf " ~%s.test", $1 }')
+# The testrunner exits nonzero when any file does, and the cipher tables make every file exit nonzero, so verdict.awk judges.
 # shellcheck disable=SC2086
-./testfixture test/testrunner.tcl veryquick --jobs "$(nproc)" $skips > testrunner.out 2>&1 ||
-    { tail -n 40 testrunner.out; echo "Failed:$failed testrunner" >&2; exit 1; }
+./testfixture test/testrunner.tcl veryquick --jobs "$(nproc)" $skips > testrunner.out 2>&1 || true
 for name in $(echo "$SKIP_FILES" | awk '{ print $1 }'); do echo "skip  $name"; done
 awk -v failures="$(echo "$EXPECTED_FAILURES" | awk '{ print $1 }')" \
     -v crashes="$(echo "$EXPECTED_CRASHES" | awk '{ print $1 }')" \

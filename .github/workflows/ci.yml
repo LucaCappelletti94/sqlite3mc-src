@@ -195,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Head of LucaCappelletti94/rusqlite feat/sqlite3mc-src, moved by hand when rusqlite-pin.yml goes red.
-      RUSQLITE_REV: 15c7356af30f42c5938b48217a240e61203eac50
+      RUSQLITE_REV: a2b5c62dc8df82b49a68ff1c2fa022d9c15b4149
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
