@@ -19,7 +19,8 @@ use crate::{
     input::{
         Algorithm, AttachCase, AttachedDb, BackupCase, Case, Cell, Cipher, Column, Config, Key,
         NativeCase, NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, SharedCacheCase,
-        Side, Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS, MAX_SIBLINGS,
+        SiblingKey, Side, Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
+        MAX_SIBLINGS,
     },
 };
 
@@ -551,15 +552,20 @@ fn exercise_attached(
 /// own), each with its own cipher, key, and `PRAGMA page_size`, then backs the source up into the
 /// destination. When `sqlite3_backup_init`'s own compatibility guard (`sqlite3mcIsBackupSupported`)
 /// refuses the pair, there is nothing further to check: that is the guard working as intended.
-/// When it lets the pair through and the backup reports full success, the destination must still
-/// reopen cleanly with its own true key: `sqlite3_backup_step`/`_finish` reporting success for a
-/// destination that cannot actually be read back is exactly the defect `utelle/SQLite3MultipleCiphers`
-/// issue #158 described, and exactly what this harness exists to catch a recurrence of.
+/// That guard still lets pairs disagreeing on reserved bytes through, and such a backup corrupts the
+/// destination (`upstream/sqlite3mc-backup-guard-ignores-reserve.md`). So only a pair laid out
+/// identically, every cipher setting but the key and the `PRAGMA page_size` equal, has to reopen
+/// cleanly with the destination's own true key after the backup reports full success. A failure
+/// there is the defect `utelle/SQLite3MultipleCiphers` issue #158 described, and exactly what this
+/// harness exists to catch a recurrence of. The one identically laid out pair exempt is a
+/// destination that hides its page size and is sized below 4096-byte pages by `PRAGMA page_size`
+/// alone, which SQLite3MC cannot reopen at all, backup or not
+/// (`upstream/sqlite3mc-rc4-short-read-skips-decryption.md`).
 ///
 /// # Panics
 ///
-/// When SQLite3MC refuses a setting or step the harness generates as valid, or a backup the guard
-/// allowed and that reported full success leaves an unreadable destination.
+/// When SQLite3MC refuses a setting or step the harness generates as valid, or a backup between
+/// two identically laid out databases reported full success and left an unreadable destination.
 pub fn run_backup(case: &BackupCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = begin_run(&SERIAL, case);
@@ -576,7 +582,14 @@ pub fn run_backup(case: &BackupCase) {
     if let Some(job) = dest.backup_init(c"main", &src, c"main") {
         let step_rc = job.step(-1);
         let finish_result = job.finish();
-        if step_rc == SQLITE_DONE && finish_result.is_ok() {
+        if step_rc == SQLITE_DONE
+            && finish_result.is_ok()
+            && case.src_page_size == case.dest_page_size
+            && case.src.same_layout(&case.dest)
+            && !(case.dest.hides_page_size()
+                && case.dest.page_size.is_none()
+                && case.dest_page_size.is_some_and(|size| size.get() < 4096))
+        {
             drop(src);
             drop(dest);
             let dump = dump_native(&dest_path, &case.dest);
@@ -653,13 +666,16 @@ fn attach(
 /// Runs `case` against SQLite3MC's handling of shared-cache mode.
 ///
 /// A main connection creates and populates a database, then up to [`MAX_SIBLINGS`] further
-/// connections open the *same* file under shared-cache mode, each with their own cipher and key.
+/// connections open the *same* file under shared-cache mode, each keying it with `main`'s own
+/// configuration or one of its own.
 ///
 /// # Panics
 ///
 /// When SQLite3MC refuses a setting or step the harness generates as valid, when `main`'s own
-/// read fails after a sibling connects despite `main` never changing its own key, or when the
-/// file itself fails to read back cleanly under its one true key once every connection closes.
+/// read fails after siblings keyed with the same configuration connect, or when the file itself
+/// fails to read back cleanly under its one true key once every connection closes. A sibling
+/// workload run after another sibling keyed the file differently writes through that sibling's
+/// codec (`utelle/SQLite3MultipleCiphers` issue #281), so such a run skips the file check.
 pub fn run_shared_cache(case: &SharedCacheCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
     let _serial = begin_run(&SERIAL, case);
@@ -673,7 +689,7 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
 
     let cipher = case.written.cipher;
     let main = open_native(&path, &case.written, "shared-cache database");
-    if let Err(code) = main.execute(c"CREATE TABLE t0(i INTEGER)", &[]) {
+    if let Err(code) = main.execute(c"CREATE TABLE t0(i INTEGER, r REAL, t TEXT, b BLOB)", &[]) {
         panic!(
             "SQLite3MC refused to create main's own {} table: {code:?}",
             cipher.name()
@@ -682,6 +698,8 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
     run_workload(&main, "SQLite3MC", &case.main_ops, case);
 
     let mut siblings = Vec::with_capacity(case.siblings.len().min(MAX_SIBLINGS));
+    let mut one_key = true;
+    let mut foreign_write = false;
     for sibling in case.siblings.iter().take(MAX_SIBLINGS) {
         let Ok(connection) = Connection::open(
             &SQLITE3MC,
@@ -690,31 +708,43 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
         ) else {
             continue;
         };
-        let _ = configure_native(&connection, &sibling.config);
+        let config = match &sibling.key {
+            SiblingKey::Shared => &case.written,
+            SiblingKey::Own(config) => {
+                one_key &= *config == case.written;
+                config
+            }
+        };
+        let _ = configure_native(&connection, config);
+        foreign_write |= !one_key && !sibling.ops.is_empty();
         run_workload_tolerant(&connection, &sibling.ops);
         siblings.push(connection);
     }
 
-    if let Err(code) = main.execute(c"SELECT count(*) FROM sqlite_schema", &[]) {
-        panic!(
-            "SQLite3MC's main connection, still keyed with its own correct {} key, could not \
-             read its own shared-cache database after {} sibling connection(s) opened the same \
-             file for {case:#?}: {code:?}",
-            cipher.name(),
-            siblings.len(),
-        );
+    if one_key {
+        if let Err(code) = main.execute(c"SELECT count(*) FROM sqlite_schema", &[]) {
+            panic!(
+                "SQLite3MC's main connection could not read its own {} shared-cache database \
+                 after {} sibling connection(s) keyed the same file identically for {case:#?}: \
+                 {code:?}",
+                cipher.name(),
+                siblings.len(),
+            );
+        }
     }
 
     drop(siblings);
     drop(main);
 
-    let own = dump_native(&path, &case.written);
-    assert!(
-        clean_read(&own),
-        "SQLite3MC corrupted its own {} shared-cache database file for {case:#?}: {}",
-        cipher.name(),
-        describe(own.iter().rev().take(3)),
-    );
+    if !foreign_write {
+        let own = dump_native(&path, &case.written);
+        assert!(
+            clean_read(&own),
+            "SQLite3MC corrupted its own {} shared-cache database file for {case:#?}: {}",
+            cipher.name(),
+            describe(own.iter().rev().take(3)),
+        );
+    }
 
     remove(&path);
 }

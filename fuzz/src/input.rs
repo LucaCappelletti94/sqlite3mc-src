@@ -525,6 +525,39 @@ impl<'a> Arbitrary<'a> for NativeConfig {
     }
 }
 
+impl NativeConfig {
+    /// Whether `other` lays pages out exactly like `self`, every setting but the key equal.
+    #[must_use]
+    pub fn same_layout(&self, other: &Self) -> bool {
+        let Self {
+            cipher,
+            legacy,
+            page_size,
+            plaintext_header_size,
+            aegis_algorithm_256,
+            key: _,
+        } = self;
+        *cipher == other.cipher
+            && *legacy == other.legacy
+            && *page_size == other.page_size
+            && *plaintext_header_size == other.plaintext_header_size
+            && *aegis_algorithm_256 == other.aegis_algorithm_256
+    }
+
+    /// Whether this configuration encrypts page 1's header bytes 16 to 23, so nothing on disk
+    /// tells SQLite the page size before the key is set: `rc4` always, and `aes128cbc`,
+    /// `aes256cbc` and `chacha20` in `legacy` mode unless a plaintext header covers them.
+    #[must_use]
+    pub fn hides_page_size(&self) -> bool {
+        let whole_page_one = match self.cipher {
+            Cipher::Rc4 => true,
+            Cipher::Aes128 | Cipher::Aes256 | Cipher::ChaCha20 => self.legacy == Some(true),
+            Cipher::Ascon128 | Cipher::Aegis => false,
+        };
+        whole_page_one && self.plaintext_header_size.unwrap_or(0) < 24
+    }
+}
+
 /// One native-scheme execution: write, round-trip, a wrong key, and, where authenticated, damage.
 #[derive(Debug, Clone, PartialEq, Arbitrary)]
 pub struct NativeCase {
@@ -704,11 +737,14 @@ impl<'a> Arbitrary<'a> for PageSize {
 /// One `sqlite3_backup` execution: writes a source, optionally pre-populates a destination with
 /// unrelated content, then runs `sqlite3_backup_init`/`_step`/`_finish` between them.
 ///
-/// Oracle: if SQLite3MC's own compatibility guard (`sqlite3mcIsBackupSupported`, called from
-/// `sqlite3_backup_init`) lets the pair through, and every step reports success, the destination
-/// must reopen cleanly with its own true key; a refused pair (`backup_init` returning `NULL`) is
-/// not a defect, since this harness exists to find exactly the cases where that guard *should*
-/// have refused the pair but did not.
+/// SQLite3MC's own compatibility guard (`sqlite3mcIsBackupSupported`, called from
+/// `sqlite3_backup_init`) lets pairs disagreeing on reserved bytes through, so a backup between them
+/// corrupts the destination (`upstream/sqlite3mc-backup-guard-ignores-reserve.md`).
+///
+/// Oracle: when [`BackupCase::src`] and [`BackupCase::dest`] are laid out identically, every
+/// cipher setting but the key and the `PRAGMA page_size` equal, and every step reports success,
+/// the destination must reopen cleanly with its own true key. A refused pair (`backup_init`
+/// returning `NULL`) is never a defect.
 #[derive(Debug, Clone, PartialEq, Arbitrary)]
 pub struct BackupCase {
     /// The source database's own cipher and key.
@@ -729,13 +765,21 @@ pub struct BackupCase {
 /// Connections beyond this, opened to the same file under shared-cache mode, are ignored.
 pub(crate) const MAX_SIBLINGS: usize = 3;
 
+/// The cipher and key a [`SharedConnection`] stages and keys with.
+#[derive(Debug, Clone, PartialEq, Eq, Arbitrary)]
+pub enum SiblingKey {
+    /// [`SharedCacheCase::written`], the one key shared-cache mode supports per file.
+    Shared,
+    /// A configuration of its own, almost certainly not [`SharedCacheCase::written`].
+    Own(NativeConfig),
+}
+
 /// One sibling connection, opened to the same file `main` already created and populated under
 /// [`SharedCacheCase::written`]'s key, under shared-cache mode.
 #[derive(Debug, Clone, PartialEq, Arbitrary)]
 pub struct SharedConnection {
-    /// The cipher and key this connection stages and keys with, almost certainly not
-    /// [`SharedCacheCase::written`].
-    pub config: NativeConfig,
+    /// The cipher and key this connection stages and keys with.
+    pub key: SiblingKey,
     /// Workload attempted on this connection after opening, at most [`MAX_OPS`] steps of it,
     /// tolerated to fail when this connection's own key turned out wrong.
     pub ops: Vec<Op>,
@@ -744,13 +788,15 @@ pub struct SharedConnection {
 /// One shared-cache execution: a main connection creates and populates a database, then up to
 /// [`MAX_SIBLINGS`] further connections open the *same* file under shared-cache mode.
 ///
-/// Each sibling has its own cipher and key, almost certainly not matching `main`'s.
+/// Shared-cache connections to one file share one pager and one codec, so SQLite3MC supports a
+/// single key and cipher configuration per file, and a sibling keying it differently replaces
+/// the codec under `main` (`utelle/SQLite3MultipleCiphers` issue #281).
 ///
-/// Oracle: `main` never changes its own key; its own reads must keep succeeding throughout,
-/// regardless of what any sibling connection does to the file it shares with it, correct key,
-/// wrong key, or a different cipher entirely. Also checked after every connection closes: the
-/// file itself must still read back cleanly under `written`, the same way the other harnesses'
-/// own "nothing corrupts the file at rest" oracle does.
+/// Oracle: when every sibling keys with [`SiblingKey::Shared`], `main`'s own reads must keep
+/// succeeding throughout. Unless a sibling ran a workload after one keyed the file differently,
+/// and so wrote through the replaced codec, the file itself must still read back cleanly under
+/// `written` once every connection closes, the same way the other harnesses' own "nothing
+/// corrupts the file at rest" oracle does.
 #[derive(Debug, Clone, PartialEq, Arbitrary)]
 pub struct SharedCacheCase {
     /// `main`'s own cipher and key, the file's one true key.

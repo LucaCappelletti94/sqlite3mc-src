@@ -10,11 +10,15 @@ use std::path::Path;
 use sqlite3mc_src_fuzz::{
     run_shared_cache,
     seedgen::{run_search, DivergencePolicy, Family, Rng},
-    SharedCacheCase,
+    SharedCacheCase, SiblingKey,
 };
 
 const fn has_content(case: &SharedCacheCase) -> bool {
     !case.main_ops.is_empty()
+}
+
+const fn shared(key: &SiblingKey) -> bool {
+    matches!(key, SiblingKey::Shared)
 }
 
 fn families() -> &'static [Family<SharedCacheCase>] {
@@ -25,15 +29,11 @@ fn families() -> &'static [Family<SharedCacheCase>] {
         },
         Family {
             name: "one-sibling-correct-key",
-            matches: |c| {
-                c.siblings.len() == 1 && c.siblings[0].config == c.written && has_content(c)
-            },
+            matches: |c| c.siblings.len() == 1 && shared(&c.siblings[0].key) && has_content(c),
         },
         Family {
             name: "one-sibling-wrong-key",
-            matches: |c| {
-                c.siblings.len() == 1 && c.siblings[0].config != c.written && has_content(c)
-            },
+            matches: |c| c.siblings.len() == 1 && !shared(&c.siblings[0].key) && has_content(c),
         },
         Family {
             name: "many-siblings",
@@ -47,7 +47,7 @@ fn families() -> &'static [Family<SharedCacheCase>] {
             name: "all-siblings-correct-key",
             matches: |c| {
                 !c.siblings.is_empty()
-                    && c.siblings.iter().all(|s| s.config == c.written)
+                    && c.siblings.iter().all(|s| shared(&s.key))
                     && has_content(c)
             },
         },
@@ -55,8 +55,8 @@ fn families() -> &'static [Family<SharedCacheCase>] {
             name: "mixed-correct-and-wrong",
             matches: |c| {
                 c.siblings.len() >= 2
-                    && c.siblings.iter().any(|s| s.config == c.written)
-                    && c.siblings.iter().any(|s| s.config != c.written)
+                    && c.siblings.iter().any(|s| shared(&s.key))
+                    && c.siblings.iter().any(|s| !shared(&s.key))
                     && has_content(c)
             },
         },
