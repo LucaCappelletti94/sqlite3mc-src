@@ -26,9 +26,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
-        with:
-          toolchain: stable
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - id: crate
         run: |
@@ -70,9 +70,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
-        with:
-          toolchain: stable
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - if: needs.verify.outputs.publish == 'yes'
         id: auth
