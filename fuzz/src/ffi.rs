@@ -1,4 +1,8 @@
-//! The C API of both libraries, reached through the renamed symbols `build.rs` produces.
+//! The C API of the vendored amalgamation, its `sqlite3mc_*` extensions included.
+//!
+//! Every handle is an opaque foreign allocation owned by SQLite3MC, moved through
+//! [`crate::db`] as a `NonNull` and released by exactly one matching call. Every `&CStr`
+//! parameter is NUL-terminated and must outlive the call; the amalgamation copies what it keeps.
 
 use core::ffi::{c_char, c_double, c_int, c_void};
 
@@ -34,157 +38,67 @@ pub(crate) const SQLITE_FLOAT: c_int = 2;
 pub(crate) const SQLITE_TEXT: c_int = 3;
 pub(crate) const SQLITE_BLOB: c_int = 4;
 
-/// One library's entry points, so the harness drives either side through the same code.
-pub(crate) struct Api {
-    pub(crate) open_v2:
-        unsafe extern "C" fn(*const c_char, *mut *mut Sqlite3, c_int, *const c_char) -> c_int,
-    pub(crate) close_v2: unsafe extern "C" fn(*mut Sqlite3) -> c_int,
-    pub(crate) key: unsafe extern "C" fn(*mut Sqlite3, *const c_void, c_int) -> c_int,
-    pub(crate) rekey: unsafe extern "C" fn(*mut Sqlite3, *const c_void, c_int) -> c_int,
-    pub(crate) prepare_v2: unsafe extern "C" fn(
-        *mut Sqlite3,
-        *const c_char,
-        c_int,
-        *mut *mut Stmt,
-        *mut *const c_char,
-    ) -> c_int,
-    pub(crate) step: unsafe extern "C" fn(*mut Stmt) -> c_int,
-    pub(crate) reset: unsafe extern "C" fn(*mut Stmt) -> c_int,
-    pub(crate) clear_bindings: unsafe extern "C" fn(*mut Stmt) -> c_int,
-    pub(crate) finalize: unsafe extern "C" fn(*mut Stmt) -> c_int,
-    pub(crate) bind_null: unsafe extern "C" fn(*mut Stmt, c_int) -> c_int,
-    pub(crate) bind_int64: unsafe extern "C" fn(*mut Stmt, c_int, i64) -> c_int,
-    pub(crate) bind_double: unsafe extern "C" fn(*mut Stmt, c_int, c_double) -> c_int,
-    pub(crate) bind_text:
-        unsafe extern "C" fn(*mut Stmt, c_int, *const c_char, c_int, Destructor) -> c_int,
-    pub(crate) bind_blob:
-        unsafe extern "C" fn(*mut Stmt, c_int, *const c_void, c_int, Destructor) -> c_int,
-    pub(crate) column_count: unsafe extern "C" fn(*mut Stmt) -> c_int,
-    pub(crate) column_type: unsafe extern "C" fn(*mut Stmt, c_int) -> c_int,
-    pub(crate) column_int64: unsafe extern "C" fn(*mut Stmt, c_int) -> i64,
-    pub(crate) column_double: unsafe extern "C" fn(*mut Stmt, c_int) -> c_double,
-    pub(crate) column_text: unsafe extern "C" fn(*mut Stmt, c_int) -> *const u8,
-    pub(crate) column_blob: unsafe extern "C" fn(*mut Stmt, c_int) -> *const c_void,
-    pub(crate) column_bytes: unsafe extern "C" fn(*mut Stmt, c_int) -> c_int,
-    pub(crate) backup_init: unsafe extern "C" fn(
-        *mut Sqlite3,
-        *const c_char,
-        *mut Sqlite3,
-        *const c_char,
-    ) -> *mut Backup,
-    pub(crate) backup_step: unsafe extern "C" fn(*mut Backup, c_int) -> c_int,
-    pub(crate) backup_finish: unsafe extern "C" fn(*mut Backup) -> c_int,
-    pub(crate) enable_shared_cache: unsafe extern "C" fn(c_int) -> c_int,
-    pub(crate) sqlite3mc: Option<Sqlite3mcApi>,
+unsafe extern "C" {
+    pub(crate) fn sqlite3_open_v2(
+        dbfilename: *const c_char,
+        db: *mut *mut Sqlite3,
+        flags: c_int,
+        vfs: *const c_char,
+    ) -> c_int;
+    pub(crate) fn sqlite3_close_v2(db: *mut Sqlite3) -> c_int;
+    pub(crate) fn sqlite3_key(db: *mut Sqlite3, key: *const c_void, keylen: c_int) -> c_int;
+    pub(crate) fn sqlite3_rekey(db: *mut Sqlite3, key: *const c_void, keylen: c_int) -> c_int;
+    pub(crate) fn sqlite3_prepare_v2(
+        db: *mut Sqlite3,
+        zsql: *const c_char,
+        nbyte: c_int,
+        stmt: *mut *mut Stmt,
+        tail: *mut *const c_char,
+    ) -> c_int;
+    pub(crate) fn sqlite3_step(stmt: *mut Stmt) -> c_int;
+    pub(crate) fn sqlite3_reset(stmt: *mut Stmt) -> c_int;
+    pub(crate) fn sqlite3_clear_bindings(stmt: *mut Stmt) -> c_int;
+    pub(crate) fn sqlite3_finalize(stmt: *mut Stmt) -> c_int;
+    pub(crate) fn sqlite3_bind_null(stmt: *mut Stmt, index: c_int) -> c_int;
+    pub(crate) fn sqlite3_bind_int64(stmt: *mut Stmt, index: c_int, value: i64) -> c_int;
+    pub(crate) fn sqlite3_bind_double(stmt: *mut Stmt, index: c_int, value: c_double) -> c_int;
+    pub(crate) fn sqlite3_bind_text(
+        stmt: *mut Stmt,
+        index: c_int,
+        value: *const c_char,
+        nbyte: c_int,
+        destructor: Destructor,
+    ) -> c_int;
+    pub(crate) fn sqlite3_bind_blob(
+        stmt: *mut Stmt,
+        index: c_int,
+        value: *const c_void,
+        nbyte: c_int,
+        destructor: Destructor,
+    ) -> c_int;
+    pub(crate) fn sqlite3_column_count(stmt: *mut Stmt) -> c_int;
+    pub(crate) fn sqlite3_column_type(stmt: *mut Stmt, i: c_int) -> c_int;
+    pub(crate) fn sqlite3_column_int64(stmt: *mut Stmt, i: c_int) -> i64;
+    pub(crate) fn sqlite3_column_double(stmt: *mut Stmt, i: c_int) -> c_double;
+    pub(crate) fn sqlite3_column_text(stmt: *mut Stmt, i: c_int) -> *const u8;
+    pub(crate) fn sqlite3_column_blob(stmt: *mut Stmt, i: c_int) -> *const c_void;
+    pub(crate) fn sqlite3_column_bytes(stmt: *mut Stmt, i: c_int) -> c_int;
+    pub(crate) fn sqlite3_backup_init(
+        dest: *mut Sqlite3,
+        destname: *const c_char,
+        src: *mut Sqlite3,
+        srcname: *const c_char,
+    ) -> *mut Backup;
+    pub(crate) fn sqlite3_backup_step(p: *mut Backup, n_page: c_int) -> c_int;
+    pub(crate) fn sqlite3_backup_finish(p: *mut Backup) -> c_int;
+    pub(crate) fn sqlite3_enable_shared_cache(enable: c_int) -> c_int;
+    /// SQLite3MC's own entry points, absent from upstream SQLite.
+    pub(crate) fn sqlite3mc_config(db: *mut Sqlite3, param: *const c_char, value: c_int) -> c_int;
+    pub(crate) fn sqlite3mc_config_cipher(
+        db: *mut Sqlite3,
+        cipher: *const c_char,
+        param: *const c_char,
+        value: c_int,
+    ) -> c_int;
+    pub(crate) fn sqlite3mc_cipher_index(name: *const c_char) -> c_int;
 }
-
-/// SQLite3MC's configuration entry points, which SQLCipher lacks.
-pub(crate) struct Sqlite3mcApi {
-    pub(crate) config: unsafe extern "C" fn(*mut Sqlite3, *const c_char, c_int) -> c_int,
-    pub(crate) config_cipher:
-        unsafe extern "C" fn(*mut Sqlite3, *const c_char, *const c_char, c_int) -> c_int,
-    pub(crate) cipher_index: unsafe extern "C" fn(*const c_char) -> c_int,
-}
-
-macro_rules! bindings {
-    ($module:ident, $prefix:literal, { $($name:ident($($arg:ty),*) $(-> $ret:ty)?;)* }) => {
-        mod $module {
-            use super::{c_char, c_double, c_int, c_void, Backup, Destructor, Sqlite3, Stmt};
-
-            unsafe extern "C" {
-                $(
-                    #[link_name = concat!($prefix, stringify!($name))]
-                    pub(super) fn $name($(_: $arg),*) $(-> $ret)?;
-                )*
-            }
-        }
-    };
-}
-
-macro_rules! common {
-    ($module:ident, $prefix:literal $(, $extra:ident($($arg:ty),*) -> $ret:ty)*) => {
-        bindings!($module, $prefix, {
-            sqlite3_open_v2(*const c_char, *mut *mut Sqlite3, c_int, *const c_char) -> c_int;
-            sqlite3_close_v2(*mut Sqlite3) -> c_int;
-            sqlite3_key(*mut Sqlite3, *const c_void, c_int) -> c_int;
-            sqlite3_rekey(*mut Sqlite3, *const c_void, c_int) -> c_int;
-            sqlite3_prepare_v2(*mut Sqlite3, *const c_char, c_int, *mut *mut Stmt, *mut *const c_char) -> c_int;
-            sqlite3_step(*mut Stmt) -> c_int;
-            sqlite3_reset(*mut Stmt) -> c_int;
-            sqlite3_clear_bindings(*mut Stmt) -> c_int;
-            sqlite3_finalize(*mut Stmt) -> c_int;
-            sqlite3_bind_null(*mut Stmt, c_int) -> c_int;
-            sqlite3_bind_int64(*mut Stmt, c_int, i64) -> c_int;
-            sqlite3_bind_double(*mut Stmt, c_int, c_double) -> c_int;
-            sqlite3_bind_text(*mut Stmt, c_int, *const c_char, c_int, Destructor) -> c_int;
-            sqlite3_bind_blob(*mut Stmt, c_int, *const c_void, c_int, Destructor) -> c_int;
-            sqlite3_column_count(*mut Stmt) -> c_int;
-            sqlite3_column_type(*mut Stmt, c_int) -> c_int;
-            sqlite3_column_int64(*mut Stmt, c_int) -> i64;
-            sqlite3_column_double(*mut Stmt, c_int) -> c_double;
-            sqlite3_column_text(*mut Stmt, c_int) -> *const u8;
-            sqlite3_column_blob(*mut Stmt, c_int) -> *const c_void;
-            sqlite3_column_bytes(*mut Stmt, c_int) -> c_int;
-            sqlite3_backup_init(*mut Sqlite3, *const c_char, *mut Sqlite3, *const c_char) -> *mut Backup;
-            sqlite3_backup_step(*mut Backup, c_int) -> c_int;
-            sqlite3_backup_finish(*mut Backup) -> c_int;
-            sqlite3_enable_shared_cache(c_int) -> c_int;
-            $($extra($($arg),*) -> $ret;)*
-        });
-    };
-}
-
-common!(
-    mc,
-    "mc_",
-    sqlite3mc_config(*mut Sqlite3, *const c_char, c_int) -> c_int,
-    sqlite3mc_config_cipher(*mut Sqlite3, *const c_char, *const c_char, c_int) -> c_int,
-    sqlite3mc_cipher_index(*const c_char) -> c_int
-);
-common!(sc, "sc_");
-
-macro_rules! api {
-    ($module:ident, $sqlite3mc:expr) => {
-        Api {
-            open_v2: $module::sqlite3_open_v2,
-            close_v2: $module::sqlite3_close_v2,
-            key: $module::sqlite3_key,
-            rekey: $module::sqlite3_rekey,
-            prepare_v2: $module::sqlite3_prepare_v2,
-            step: $module::sqlite3_step,
-            reset: $module::sqlite3_reset,
-            clear_bindings: $module::sqlite3_clear_bindings,
-            finalize: $module::sqlite3_finalize,
-            bind_null: $module::sqlite3_bind_null,
-            bind_int64: $module::sqlite3_bind_int64,
-            bind_double: $module::sqlite3_bind_double,
-            bind_text: $module::sqlite3_bind_text,
-            bind_blob: $module::sqlite3_bind_blob,
-            column_count: $module::sqlite3_column_count,
-            column_type: $module::sqlite3_column_type,
-            column_int64: $module::sqlite3_column_int64,
-            column_double: $module::sqlite3_column_double,
-            column_text: $module::sqlite3_column_text,
-            column_blob: $module::sqlite3_column_blob,
-            column_bytes: $module::sqlite3_column_bytes,
-            backup_init: $module::sqlite3_backup_init,
-            backup_step: $module::sqlite3_backup_step,
-            backup_finish: $module::sqlite3_backup_finish,
-            enable_shared_cache: $module::sqlite3_enable_shared_cache,
-            sqlite3mc: $sqlite3mc,
-        }
-    };
-}
-
-/// SQLite3 Multiple Ciphers, from `sqlite3mc-src`.
-pub(crate) static SQLITE3MC: Api = api!(
-    mc,
-    Some(Sqlite3mcApi {
-        config: mc::sqlite3mc_config,
-        config_cipher: mc::sqlite3mc_config_cipher,
-        cipher_index: mc::sqlite3mc_cipher_index,
-    })
-);
-
-/// SQLCipher with its libtomcrypt provider, from `sqlcipher-src`.
-pub(crate) static SQLCIPHER: Api = api!(sc, None);

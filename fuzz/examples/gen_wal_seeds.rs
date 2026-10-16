@@ -1,8 +1,9 @@
 //! Builds `corpus/wal` the same way `gen_rekey_seeds` builds `corpus/rekey`: rejection sampling
 //! through the real `Arbitrary` impl, keeping the first *clean* draw that lands on each target
-//! parameter family. A draw that panics is never committed to `corpus/wal` (it would permanently
-//! fail the replay test); the first one found per family is saved to `corpus/findings/` instead,
-//! which nothing replays, and the search continues past it for a clean representative.
+//! parameter family. A draw that panics is never committed to `corpus/wal` (it would
+//! permanently fail the replay test); the first one found per family is saved to
+//! `corpus/findings/` instead, which nothing replays, and the search continues past it for a
+//! clean representative.
 
 use std::path::Path;
 
@@ -31,8 +32,8 @@ fn families() -> &'static [Family<WalCase>] {
             matches: |c| c.config.cipher == Cipher::ChaCha20 && has_ops(c),
         },
         Family {
-            name: "cipher-rc4",
-            matches: |c| c.config.cipher == Cipher::Rc4 && has_ops(c),
+            name: "cipher-sqlcipher",
+            matches: |c| c.config.cipher == Cipher::SqlCipher && has_ops(c),
         },
         Family {
             name: "cipher-ascon128",

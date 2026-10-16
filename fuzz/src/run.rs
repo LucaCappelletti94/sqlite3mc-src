@@ -1,9 +1,9 @@
-//! One execution: write with one side, read with both, damage a copy, read that with both.
+//! One execution: write, read back, damage a copy, read that, through SQLite3MC's own ciphers.
 
 use core::ffi::{c_int, CStr};
 use std::{
     ffi::CString,
-    fmt::{Debug, Write as _},
+    fmt::Write as _,
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
@@ -12,15 +12,11 @@ use std::{
 
 use crate::{
     db::{Code, Connection, Param, Value},
-    ffi::{
-        Api, SQLCIPHER, SQLITE3MC, SQLITE_DONE, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY,
-        SQLITE_OPEN_READWRITE,
-    },
+    ffi::{SQLITE_DONE, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE},
     input::{
-        Algorithm, AttachCase, AttachedDb, BackupCase, Case, Cell, Cipher, Column, Config, Key,
-        NativeCase, NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, SharedCacheCase,
-        SiblingKey, Side, Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
-        MAX_SIBLINGS,
+        Algorithm, AttachCase, AttachedDb, BackupCase, Cell, Cipher, Column, NativeCase,
+        NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, SharedCacheCase, SiblingKey,
+        Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS, MAX_SIBLINGS,
     },
 };
 
@@ -41,77 +37,8 @@ const TABLE_NAMES: [&str; 3] = ["t0", "t1", "t2"];
 /// every native scheme leaves outside its AEAD coverage, independent of `plaintext_header_size`.
 const CIPHER_PAGE1_OFFSET: usize = 24;
 
-/// Runs `case`, panicking when the libraries disagree or the writer cannot read its own file.
-///
-/// # Panics
-///
-/// On a divergence, or when a library refuses a setting or step the harness generates as valid.
-pub fn run(case: &Case) {
-    static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
-
-    let dir = WORKDIR.as_path();
-    let clean = dir.join("clean.db");
-    let damaged = dir.join("damaged.db");
-    remove(&clean);
-    remove(&damaged);
-
-    let writer = case.writer;
-    let reader = match writer {
-        Side::SqlCipher => Side::Sqlite3mc,
-        Side::Sqlite3mc => Side::SqlCipher,
-    };
-    write(writer, &clean, case);
-
-    let own = dump(api(writer), &clean, |c| configure(c, writer, &case.config));
-    assert!(
-        clean_read(&own),
-        "{} cannot read back its own file for {case:#?}: {}",
-        name(writer),
-        describe(own.iter().rev().take(3)),
-    );
-    compare(
-        case,
-        "the clean file",
-        writer,
-        &own,
-        reader,
-        &dump(api(reader), &clean, |c| configure(c, reader, &case.config)),
-    );
-
-    let mut bytes = fs::read(&clean).expect("the clean file exists");
-    let flips = &case.damage[..case.damage.len().min(MAX_FLIPS)];
-    if !bytes.is_empty() && !flips.is_empty() {
-        let len = u64::try_from(bytes.len()).expect("file length fits u64");
-        for flip in flips {
-            let offset =
-                usize::try_from(u64::from(flip.offset) % len).expect("offset is below the length");
-            // SQLite3MC reads this salt from the file (upstream/sqlite3mc-sqlcipher-explicit-salt.md).
-            if offset < 16 && case.config.explicit_salt_unused_by_sqlite3mc() {
-                continue;
-            }
-            bytes[offset] ^= flip.mask;
-        }
-        fs::write(&damaged, &bytes).expect("the work directory is writable");
-        let by_writer = dump(api(writer), &damaged, |c| {
-            configure(c, writer, &case.config)
-        });
-        let by_reader = dump(api(reader), &damaged, |c| {
-            configure(c, reader, &case.config)
-        });
-        compare(
-            case,
-            "the damaged file",
-            writer,
-            &by_writer,
-            reader,
-            &by_reader,
-        );
-    }
-
-    remove(&clean);
-    remove(&damaged);
-}
+/// The page size the native targets see: they never set `PRAGMA page_size`.
+const PAGE_SIZE: usize = 4096;
 
 /// Whether `log` is a full, successful dump: no failed step, ending in an `ok` integrity check.
 fn clean_read(log: &[Record]) -> bool {
@@ -133,7 +60,7 @@ fn clean_read(log: &[Record]) -> bool {
 /// When SQLite3MC refuses a setting or step the harness generates as valid, or an oracle fails.
 pub fn run_native(case: &NativeCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("native-clean.db");
@@ -173,7 +100,7 @@ pub fn run_native(case: &NativeCase) {
         );
     }
 
-    if cipher.authenticated() {
+    if case.config.authenticated() {
         let original = fs::read(&clean).expect("the clean file exists");
         let mut bytes = original.clone();
         let flips = &case.damage[..case.damage.len().min(MAX_FLIPS)];
@@ -184,12 +111,19 @@ pub fn run_native(case: &NativeCase) {
         // docs state); tampering it is never expected to be caught.
         let unauthenticated =
             usize::from(case.config.plaintext_header_size.unwrap_or(0)).max(CIPHER_PAGE1_OFFSET);
+        // `sqlcipher` with a SHA1 HMAC stores its digest in a 32-byte per-page slot but verifies
+        // only the first 20 bytes, so each page's last 12 slot bytes are unauthenticated.
+        let page_pad = usize::from(
+            cipher == Cipher::SqlCipher && case.config.hmac_algorithm == Some(Algorithm::Sha1),
+        ) * 12;
         if !bytes.is_empty() && !flips.is_empty() {
             let len = u64::try_from(bytes.len()).expect("file length fits u64");
             for flip in flips {
                 let offset = usize::try_from(u64::from(flip.offset) % len)
                     .expect("offset is below the length");
-                if offset < unauthenticated {
+                if offset < unauthenticated
+                    || (page_pad > 0 && offset % PAGE_SIZE >= PAGE_SIZE - page_pad)
+                {
                     continue;
                 }
                 bytes[offset] ^= flip.mask;
@@ -215,7 +149,7 @@ pub fn run_native(case: &NativeCase) {
 
 /// Everything SQLite3MC can read back from `path` with `config`'s key, up to the first failure.
 fn dump_native(path: &Path, config: &NativeConfig) -> Vec<Record> {
-    dump(&SQLITE3MC, path, |c| configure_native(c, config))
+    dump(path, |c| configure_native(c, config))
 }
 
 /// Runs `case` against SQLite3MC's rekey support.
@@ -230,7 +164,7 @@ fn dump_native(path: &Path, config: &NativeConfig) -> Vec<Record> {
 /// valid, or an oracle fails.
 pub fn run_rekey(case: &RekeyCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("rekey.db");
@@ -275,7 +209,7 @@ pub fn run_rekey(case: &RekeyCase) {
         RekeyAction::Decrypt => None,
     };
     let own = after_config.as_ref().map_or_else(
-        || dump(&SQLITE3MC, &clean, |_| Ok(())),
+        || dump(&clean, |_| Ok(())),
         |config| dump_native(&clean, config),
     );
     assert!(
@@ -316,7 +250,7 @@ pub fn run_rekey(case: &RekeyCase) {
 /// When SQLite3MC refuses a setting or step the harness generates as valid, or the oracle fails.
 pub fn run_wal(case: &WalCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
     let dir = WORKDIR.as_path();
     let clean = dir.join("wal.db");
@@ -389,7 +323,7 @@ pub fn run_wal(case: &WalCase) {
 /// file fails to read back cleanly afterward.
 pub fn run_attach(case: &AttachCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
     let dir = WORKDIR.as_path();
     let main_path = dir.join("attach-main.db");
@@ -514,7 +448,7 @@ fn write_native(path: &Path, config: &NativeConfig, rows: usize) {
 /// after a failed `ATTACH` is skipped; every other step is tolerated to fail, a wrong or
 /// inherited key means they are expected to.
 fn exercise_attached(
-    connection: &Connection<'_>,
+    connection: &Connection,
     index: usize,
     attached: &AttachedDb,
     cross_copy: bool,
@@ -557,10 +491,7 @@ fn exercise_attached(
 /// identically, every cipher setting but the key and the `PRAGMA page_size` equal, has to reopen
 /// cleanly with the destination's own true key after the backup reports full success. A failure
 /// there is the defect `utelle/SQLite3MultipleCiphers` issue #158 described, and exactly what this
-/// harness exists to catch a recurrence of. The one identically laid out pair exempt is a
-/// destination that hides its page size and has `PRAGMA page_size` below the page size SQLite3MC
-/// assumes on reopen, `legacy_page_size` or 4096 bytes, which it cannot reopen at all, backup or
-/// not (`upstream/sqlite3mc-rc4-short-read-skips-decryption.md`).
+/// harness exists to catch a recurrence of.
 ///
 /// # Panics
 ///
@@ -568,7 +499,7 @@ fn exercise_attached(
 /// two identically laid out databases reported full success and left an unreadable destination.
 pub fn run_backup(case: &BackupCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
     let dir = WORKDIR.as_path();
     let src_path = dir.join("backup-src.db");
@@ -586,10 +517,6 @@ pub fn run_backup(case: &BackupCase) {
             && finish_result.is_ok()
             && case.src_page_size == case.dest_page_size
             && case.src.same_layout(&case.dest)
-            && !(case.dest.hides_page_size()
-                && case
-                    .dest_page_size
-                    .is_some_and(|size| size.get() < case.dest.page_size.unwrap_or(4096)))
         {
             drop(src);
             drop(dest);
@@ -611,12 +538,12 @@ pub fn run_backup(case: &BackupCase) {
 
 /// Opens a new SQLite3MC file at `path`, stages and applies `config`'s cipher and key, sets
 /// `page_size` through `PRAGMA page_size` first when given, then runs `ops`.
-fn open_for_backup<'a>(
+fn open_for_backup(
     path: &Path,
     config: &NativeConfig,
     page_size: Option<PageSize>,
     ops: &[Op],
-) -> Connection<'a> {
+) -> Connection {
     let connection = open_native(path, config, "file");
     if let Some(page_size) = page_size {
         let text = sql(&format!("PRAGMA page_size={}", page_size.get()));
@@ -636,7 +563,7 @@ fn open_for_backup<'a>(
 /// key when given, omitting the `KEY` clause entirely otherwise (which SQLite3MC resolves by
 /// copying the main database's own current codec verbatim). Returns whether it succeeded.
 fn attach(
-    connection: &Connection<'_>,
+    connection: &Connection,
     db_name: &str,
     path_str: &str,
     attach_key: Option<&NativeConfig>,
@@ -679,10 +606,9 @@ fn attach(
 /// codec (`utelle/SQLite3MultipleCiphers` issue #281), so such a run skips the file check.
 pub fn run_shared_cache(case: &SharedCacheCase) {
     static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL, case);
+    let _serial = begin_run(&SERIAL);
 
-    crate::db::enable_shared_cache(&SQLITE3MC, true)
-        .expect("SQLite3MC accepts sqlite3_enable_shared_cache(1)");
+    crate::db::enable_shared_cache(true).expect("SQLite3MC accepts sqlite3_enable_shared_cache(1)");
 
     let dir = WORKDIR.as_path();
     let path = dir.join("shared-cache.db");
@@ -702,11 +628,9 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
     let mut one_key = true;
     let mut foreign_write = false;
     for sibling in case.siblings.iter().take(MAX_SIBLINGS) {
-        let Ok(connection) = Connection::open(
-            &SQLITE3MC,
-            &c_path(&path),
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-        ) else {
+        let Ok(connection) =
+            Connection::open(&c_path(&path), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
+        else {
             continue;
         };
         let config = match &sibling.key {
@@ -750,20 +674,6 @@ pub fn run_shared_cache(case: &SharedCacheCase) {
     remove(&path);
 }
 
-const fn api(side: Side) -> &'static Api {
-    match side {
-        Side::SqlCipher => &SQLCIPHER,
-        Side::Sqlite3mc => &SQLITE3MC,
-    }
-}
-
-const fn name(side: Side) -> &'static str {
-    match side {
-        Side::SqlCipher => "SQLCipher",
-        Side::Sqlite3mc => "SQLite3MC",
-    }
-}
-
 /// A per-process directory on tmpfs where there is one.
 static WORKDIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let shm = Path::new("/dev/shm");
@@ -777,17 +687,12 @@ static WORKDIR: LazyLock<PathBuf> = LazyLock::new(|| {
     dir
 });
 
-/// Locks `serial` and reseeds the deterministic entropy stream from `case`, so the same case
-/// always draws the same salts and IVs on replay, but different cases are not forced to start
-/// from the identical stream. The returned guard must stay alive for the whole run, SQLCipher is
-/// compiled with no-op mutexes and every execution reuses one directory.
-fn begin_run<'a>(serial: &'a Mutex<()>, case: &impl Debug) -> MutexGuard<'a, ()> {
+/// Locks `serial` so the fixed file names in the shared work directory see one run at a time.
+/// The guard must stay alive for the whole run.
+fn begin_run(serial: &Mutex<()>) -> MutexGuard<'_, ()> {
     let guard = serial
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&format!("{case:?}"), &mut hasher);
-    crate::entropy::reset(std::hash::Hasher::finish(&hasher));
     guard
 }
 
@@ -813,128 +718,12 @@ fn hex(bytes: &[u8], out: &mut String) {
     }
 }
 
-fn key_bytes(key: &Key) -> Vec<u8> {
-    match key {
-        Key::Raw(key) => {
-            let mut text = String::from("x'");
-            hex(key, &mut text);
-            text.push('\'');
-            text.into_bytes()
-        }
-        Key::RawWithSalt { key, salt, .. } => {
-            let mut text = String::from("x'");
-            hex(key, &mut text);
-            hex(salt, &mut text);
-            text.push('\'');
-            text.into_bytes()
-        }
-        Key::Passphrase { bytes, .. } => bytes.clone(),
-    }
-}
-
-/// Applies `config` and the key, returning only a refused key as an observation.
-fn configure(connection: &Connection<'_>, side: Side, config: &Config) -> Result<(), Code> {
-    match side {
-        Side::Sqlite3mc => configure_sqlite3mc(connection, config),
-        Side::SqlCipher => configure_sqlcipher(connection, config),
-    }
-}
-
 const fn sqlite3mc_algorithm(algorithm: Algorithm) -> c_int {
     match algorithm {
         Algorithm::Sha1 => 0,
         Algorithm::Sha256 => 1,
         Algorithm::Sha512 => 2,
     }
-}
-
-fn configure_sqlite3mc(connection: &Connection<'_>, config: &Config) -> Result<(), Code> {
-    let cipher = connection.sqlite3mc_cipher_index(c"sqlcipher");
-    assert_eq!(
-        connection.sqlite3mc_config(c"cipher", cipher),
-        cipher,
-        "SQLite3MC refused its sqlcipher scheme"
-    );
-    let set = |param: &CStr, value: c_int| {
-        let set = connection.sqlite3mc_config_cipher(c"sqlcipher", param, value);
-        assert_eq!(set, value, "SQLite3MC refused {param:?} = {value}");
-    };
-    // `legacy` first, since it resets the other parameters to that version's defaults.
-    set(c"legacy", c_int::from(config.compatibility));
-    if let Some(page_size) = config.page_size {
-        set(
-            c"legacy_page_size",
-            c_int::try_from(page_size).expect("page sizes fit an int"),
-        );
-    }
-    if let Some(algorithm) = config.kdf_algorithm {
-        set(c"kdf_algorithm", sqlite3mc_algorithm(algorithm));
-    }
-    if let Some(algorithm) = config.hmac_algorithm {
-        set(c"hmac_algorithm", sqlite3mc_algorithm(algorithm));
-    }
-    if let Some(hmac) = config.hmac {
-        set(c"hmac_use", c_int::from(hmac));
-    }
-    if let Key::Passphrase { kdf_iter, .. } = config.key {
-        set(c"kdf_iter", c_int::from(kdf_iter));
-    }
-    if config.plaintext_header() > 0 {
-        set(
-            c"plaintext_header_size",
-            c_int::from(config.plaintext_header()),
-        );
-    }
-    connection.key(&key_bytes(&config.key))
-}
-
-fn configure_sqlcipher(connection: &Connection<'_>, config: &Config) -> Result<(), Code> {
-    // SQLCipher ignores cipher pragmas until the key has created the codec.
-    connection.key(&key_bytes(&config.key))?;
-    let pragma = |text: String| {
-        let result = connection.execute(&sql(&text), &[]);
-        assert_eq!(result, Ok(()), "SQLCipher refused {text}");
-    };
-    pragma(format!(
-        "PRAGMA cipher_compatibility = {}",
-        config.compatibility
-    ));
-    if let Some(page_size) = config.page_size {
-        pragma(format!("PRAGMA cipher_page_size = {page_size}"));
-    }
-    let hash = |algorithm| match algorithm {
-        Algorithm::Sha1 => "SHA1",
-        Algorithm::Sha256 => "SHA256",
-        Algorithm::Sha512 => "SHA512",
-    };
-    if let Some(algorithm) = config.kdf_algorithm {
-        pragma(format!(
-            "PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_{}",
-            hash(algorithm)
-        ));
-    }
-    if let Some(algorithm) = config.hmac_algorithm {
-        pragma(format!(
-            "PRAGMA cipher_hmac_algorithm = HMAC_{}",
-            hash(algorithm)
-        ));
-    }
-    if let Some(hmac) = config.hmac {
-        pragma(format!(
-            "PRAGMA cipher_use_hmac = {}",
-            if hmac { "ON" } else { "OFF" }
-        ));
-    }
-    if let Key::Passphrase { kdf_iter, .. } = config.key {
-        pragma(format!("PRAGMA kdf_iter = {kdf_iter}"));
-    }
-    if config.plaintext_header() > 0 {
-        pragma(format!(
-            "PRAGMA cipher_plaintext_header_size = {}",
-            config.plaintext_header()
-        ));
-    }
-    Ok(())
 }
 
 /// `key`'s bytes, truncated to `key_len` where that is shorter than the form's own natural
@@ -1008,9 +797,9 @@ const fn aegis_algorithm(select_256: bool) -> c_int {
 /// Sets every SQLite3MC cipher parameter `config` carries, without touching the key. The
 /// resulting pending state is consumed by whichever key-setup call runs next on this
 /// connection: [`Connection::key`], `ATTACH ... KEY`, or [`Connection::rekey`].
-fn stage_cipher(connection: &Connection<'_>, config: &NativeConfig) {
+fn stage_cipher(connection: &Connection, config: &NativeConfig) {
     let cipher_name = CString::new(config.cipher.name()).expect("cipher names have no NUL");
-    let index = connection.sqlite3mc_cipher_index(&cipher_name);
+    let index = Connection::sqlite3mc_cipher_index(&cipher_name);
     assert_eq!(
         connection.sqlite3mc_config(c"cipher", index),
         index,
@@ -1026,14 +815,20 @@ fn stage_cipher(connection: &Connection<'_>, config: &NativeConfig) {
             config.cipher.name()
         );
     };
-    if let Some(legacy) = config.legacy {
-        set(c"legacy", c_int::from(legacy));
+    // `legacy` first, since setting it resets the other parameters to that version's defaults.
+    if config.cipher.has_legacy_param() {
+        set(c"legacy", 0);
     }
-    if let Some(page_size) = config.page_size {
-        set(
-            c"legacy_page_size",
-            c_int::try_from(page_size).expect("page sizes fit an int"),
-        );
+    if matches!(config.cipher, Cipher::SqlCipher) {
+        if let Some(algorithm) = config.kdf_algorithm {
+            set(c"kdf_algorithm", sqlite3mc_algorithm(algorithm));
+        }
+        if let Some(algorithm) = config.hmac_algorithm {
+            set(c"hmac_algorithm", sqlite3mc_algorithm(algorithm));
+        }
+        if let Some(hmac_use) = config.hmac_use {
+            set(c"hmac_use", c_int::from(hmac_use));
+        }
     }
     if matches!(config.cipher, Cipher::Aegis) {
         set(c"algorithm", aegis_algorithm(config.aegis_algorithm_256));
@@ -1050,7 +845,7 @@ fn stage_cipher(connection: &Connection<'_>, config: &NativeConfig) {
 
 /// Applies `config` and the key to SQLite3MC's own native scheme, returning only a refused key as
 /// an observation.
-fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Result<(), Code> {
+fn configure_native(connection: &Connection, config: &NativeConfig) -> Result<(), Code> {
     stage_cipher(connection, config);
     connection.key(&native_key_bytes(
         &config.key,
@@ -1061,19 +856,15 @@ fn configure_native(connection: &Connection<'_>, config: &NativeConfig) -> Resul
 /// Opens a new SQLite3MC file at `path` and applies `config`'s cipher and key, panicking with
 /// `what` (e.g. `"file"`, `"main database"`) naming the file in the message if SQLite3MC refuses
 /// to create or key it.
-fn open_native<'a>(path: &Path, config: &NativeConfig, what: &str) -> Connection<'a> {
+fn open_native(path: &Path, config: &NativeConfig, what: &str) -> Connection {
     let cipher = config.cipher;
-    let connection = Connection::open(
-        &SQLITE3MC,
-        &c_path(path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| {
-        panic!(
-            "SQLite3MC cannot create a {} {what}: {code:?}",
-            cipher.name()
-        )
-    });
+    let connection = Connection::open(&c_path(path), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
+        .unwrap_or_else(|code| {
+            panic!(
+                "SQLite3MC cannot create a {} {what}: {code:?}",
+                cipher.name()
+            )
+        });
     if let Err(code) = configure_native(&connection, config) {
         panic!(
             "SQLite3MC refused the key of a new {} {what}: {code:?}",
@@ -1131,25 +922,10 @@ impl<'a> Owned<'a> {
     }
 }
 
-/// Creates the database and runs the workload, whose steps are all valid SQL.
-fn write(side: Side, path: &Path, case: &Case) {
-    let connection = Connection::open(
-        api(side),
-        &c_path(path),
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap_or_else(|code| panic!("{} cannot create a database: {code:?}", name(side)));
-    if let Err(code) = configure(&connection, side, &case.config) {
-        panic!("{} refused the key of a new database: {code:?}", name(side));
-    }
-    run_workload(&connection, name(side), &case.ops, case);
-}
-
 /// Runs `ops` against an already-open, already-configured connection, panicking with `label` and
-/// `context`'s own Debug output naming what failed. Shared by the differential writer and any
-/// other input model that drives a workload against one connection it expects to always work.
+/// `context`'s own Debug output naming what failed.
 pub(crate) fn run_workload<D: std::fmt::Debug>(
-    connection: &Connection<'_>,
+    connection: &Connection,
     label: &str,
     ops: &[Op],
     context: &D,
@@ -1167,7 +943,7 @@ pub(crate) fn run_workload<D: std::fmt::Debug>(
 /// Runs `ops` against an already-open, already-configured connection, silently stopping at the
 /// first statement that fails instead of panicking. For a connection whose own key or cipher may
 /// be wrong on purpose, where failure is expected and not itself a defect.
-pub(crate) fn run_workload_tolerant(connection: &Connection<'_>, ops: &[Op]) {
+pub(crate) fn run_workload_tolerant(connection: &Connection, ops: &[Op]) {
     run_workload_with(connection, ops, |connection, text, params, _op| {
         connection.execute(&sql(text), params).is_ok()
     });
@@ -1177,9 +953,9 @@ pub(crate) fn run_workload_tolerant(connection: &Connection<'_>, ops: &[Op]) {
 /// `run` reports whether its statement succeeded, which decides whether dependent state (a table
 /// now existing, a transaction now open) advances or the op is treated as never having happened.
 fn run_workload_with(
-    connection: &Connection<'_>,
+    connection: &Connection,
     ops: &[Op],
-    mut run: impl FnMut(&Connection<'_>, &str, &[Param<'_>], &Op) -> bool,
+    mut run: impl FnMut(&Connection, &str, &[Param<'_>], &Op) -> bool,
 ) {
     let mut created = [false; 3];
     // Tables created inside a transaction disappear again on rollback.
@@ -1247,15 +1023,11 @@ fn run_workload_with(
     }
 }
 
-/// Everything `api` can read from the file at `path` with the key `configure` applies, up to the
-/// first failure.
-fn dump(
-    api: &Api,
-    path: &Path,
-    configure: impl FnOnce(&Connection<'_>) -> Result<(), Code>,
-) -> Vec<Record> {
+/// Everything SQLite3MC can read from the file at `path` with the key `configure` applies, up
+/// to the first failure.
+fn dump(path: &Path, configure: impl FnOnce(&Connection) -> Result<(), Code>) -> Vec<Record> {
     let mut log = Vec::new();
-    let connection = match Connection::open(api, &c_path(path), SQLITE_OPEN_READONLY) {
+    let connection = match Connection::open(&c_path(path), SQLITE_OPEN_READONLY) {
         Ok(connection) => connection,
         Err(code) => {
             log.push(Record::Failed("open", code));
@@ -1287,12 +1059,7 @@ fn dump(
 
 type Step = Result<(), (&'static str, Code)>;
 
-fn rows(
-    connection: &Connection<'_>,
-    stage: &'static str,
-    query: &CStr,
-    log: &mut Vec<Record>,
-) -> Step {
+fn rows(connection: &Connection, stage: &'static str, query: &CStr, log: &mut Vec<Record>) -> Step {
     let mut statement = connection.prepare(query).map_err(|code| (stage, code))?;
     while let Some(row) = statement.next_row().map_err(|code| (stage, code))? {
         log.push(Record::Row(stage, row));
@@ -1301,7 +1068,7 @@ fn rows(
 }
 
 /// Logs every page's content area, cutting the reserved bytes page 1's header byte 20 names.
-fn pages(connection: &Connection<'_>, log: &mut Vec<Record>) -> Step {
+fn pages(connection: &Connection, log: &mut Vec<Record>) -> Step {
     const STAGE: &str = "sqlite_dbpage";
     let mut statement = connection
         .prepare(c"SELECT pgno, data FROM sqlite_dbpage ORDER BY pgno")
@@ -1320,58 +1087,6 @@ fn pages(connection: &Connection<'_>, log: &mut Vec<Record>) -> Step {
         log.push(Record::Page(pgno, data));
     }
     Ok(())
-}
-
-fn compare(case: &Case, file: &str, a: Side, a_log: &[Record], b: Side, b_log: &[Record]) {
-    if a_log == b_log {
-        return;
-    }
-    let at = a_log.iter().zip(b_log).take_while(|(x, y)| x == y).count();
-    let (sqlcipher, sqlite3mc) = if a == Side::SqlCipher {
-        (a_log, b_log)
-    } else {
-        (b_log, a_log)
-    };
-    if case.config.reserved() > 16
-        && swallowed_hmac_failure(
-            at,
-            case.config.plaintext_header() > 0,
-            sqlcipher.get(at),
-            sqlite3mc.get(at),
-        )
-    {
-        return;
-    }
-    panic!(
-        "{} and {} disagree on {file} from record {at} (of {} and {}).\n{}:{}\n{}:{}\nfor {case:#?}",
-        name(a),
-        name(b),
-        a_log.len(),
-        b_log.len(),
-        name(a),
-        describe(&a_log[at..]),
-        name(b),
-        describe(&b_log[at..]),
-    );
-}
-
-/// SQLCipher 4.19.0 zero-fills a page that fails its HMAC check instead of reporting the failure.
-fn swallowed_hmac_failure(
-    at: usize,
-    plaintext_header: bool,
-    sqlcipher: Option<&Record>,
-    sqlite3mc: Option<&Record>,
-) -> bool {
-    match (sqlcipher, sqlite3mc) {
-        (Some(Record::Page(_, data)), Some(Record::Failed("sqlite_dbpage", Code(11)))) => {
-            data.iter().all(|&b| b == 0)
-        }
-        (
-            Some(Record::Failed("sqlite_dbpage", Code(11))),
-            Some(Record::Failed("sqlite_dbpage", Code(26))),
-        ) => at == 0 && plaintext_header,
-        _ => false,
-    }
 }
 
 /// Up to six records, one per line, each cut to a readable length.
