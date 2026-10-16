@@ -1,13 +1,13 @@
-//! Builds `corpus/native` the same way `gen_seeds` builds `corpus/differential`: rejection
-//! sampling through the real `Arbitrary` impl, keeping the first draw that lands on each target
-//! parameter family, after confirming the case runs without panicking.
+//! Builds `corpus/native`: rejection sampling through the real `Arbitrary` impl, keeping the
+//! first *clean* draw that lands on each target parameter family, after confirming the case
+//! runs without panicking.
 
 use std::path::Path;
 
 use sqlite3mc_src_fuzz::{
     run_native,
     seedgen::{run_search, DivergencePolicy, Family, Rng},
-    Cipher, NativeCase, NativeKey,
+    Algorithm, Cipher, NativeCase, NativeKey,
 };
 
 const fn has_ops(case: &NativeCase) -> bool {
@@ -29,12 +29,21 @@ fn families() -> &'static [Family<NativeCase>] {
             matches: |c| c.config.cipher == Cipher::ChaCha20 && has_ops(c),
         },
         Family {
-            name: "cipher-rc4",
-            matches: |c| c.config.cipher == Cipher::Rc4 && has_ops(c),
+            name: "cipher-sqlcipher",
+            matches: |c| c.config.cipher == Cipher::SqlCipher && has_ops(c),
         },
         Family {
             name: "cipher-ascon128",
             matches: |c| c.config.cipher == Cipher::Ascon128 && has_ops(c),
+        },
+        Family {
+            name: "sqlcipher-sha1-damage",
+            matches: |c| {
+                c.config.cipher == Cipher::SqlCipher
+                    && c.config.hmac_algorithm == Some(Algorithm::Sha1)
+                    && !c.damage.is_empty()
+                    && has_ops(c)
+            },
         },
         Family {
             name: "cipher-aegis",
@@ -57,12 +66,12 @@ fn families() -> &'static [Family<NativeCase>] {
             matches: |c| c.config.plaintext_header_size.is_some_and(|n| n > 0) && has_ops(c),
         },
         Family {
-            name: "legacy-set",
-            matches: |c| c.config.legacy.is_some() && has_ops(c),
+            name: "sqlcipher-hmac-off",
+            matches: |c| c.config.hmac_use == Some(false) && has_ops(c),
         },
         Family {
-            name: "page-size-set",
-            matches: |c| c.config.page_size.is_some() && has_ops(c),
+            name: "sqlcipher-hmac-sha1",
+            matches: |c| c.config.hmac_algorithm == Some(Algorithm::Sha1) && has_ops(c),
         },
         Family {
             name: "aegis-256",
@@ -74,15 +83,11 @@ fn families() -> &'static [Family<NativeCase>] {
         },
         Family {
             name: "damage-present-authenticated",
-            matches: |c| c.config.cipher.authenticated() && !c.damage.is_empty() && has_ops(c),
+            matches: |c| c.config.authenticated() && !c.damage.is_empty() && has_ops(c),
         },
         Family {
             name: "damage-present-unauthenticated",
-            matches: |c| !c.config.cipher.authenticated() && !c.damage.is_empty() && has_ops(c),
-        },
-        Family {
-            name: "many-ops",
-            matches: |c| c.ops.len() >= 20,
+            matches: |c| !c.config.authenticated() && !c.damage.is_empty() && has_ops(c),
         },
     ]
 }

@@ -3,7 +3,7 @@ name = "sqlite3mc-src-fuzz"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Fuzzing SQLite3MC against SQLCipher differentially, its own native ciphers for self-consistency, its rekey support, its WAL journal mode, its ATTACH DATABASE support, its backup API, and its shared-cache mode"
+description = "Fuzzing SQLite3MC's own cipher schemes for self-consistency, its rekey support, its WAL journal mode, its ATTACH DATABASE support, its backup API, and its shared-cache mode"
 
 [package.metadata]
 cargo-fuzz = true
@@ -14,15 +14,7 @@ libfuzzer-sys = "0.4.13"
 
 [build-dependencies]
 cc = "1.5.1"
-sqlcipher-src = "419"
 sqlite3mc-src = { path = ".." }
-
-[[bin]]
-name = "differential"
-path = "fuzz_targets/differential.rs"
-test = false
-doc = false
-bench = false
 
 [[bin]]
 name = "native"

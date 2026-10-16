@@ -32,8 +32,8 @@ fn families() -> &'static [Family<RekeyCase>] {
             matches: |c| c.config.cipher == Cipher::ChaCha20 && has_ops(c),
         },
         Family {
-            name: "cipher-rc4",
-            matches: |c| c.config.cipher == Cipher::Rc4 && has_ops(c),
+            name: "cipher-sqlcipher",
+            matches: |c| c.config.cipher == Cipher::SqlCipher && has_ops(c),
         },
         Family {
             name: "cipher-ascon128",
@@ -62,10 +62,6 @@ fn families() -> &'static [Family<RekeyCase>] {
         Family {
             name: "plaintext-header-present",
             matches: |c| c.config.plaintext_header_size.is_some_and(|n| n > 0) && has_ops(c),
-        },
-        Family {
-            name: "legacy-set",
-            matches: |c| c.config.legacy.is_some() && has_ops(c),
         },
         Family {
             name: "many-ops-before",
