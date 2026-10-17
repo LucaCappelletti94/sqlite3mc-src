@@ -86,7 +86,8 @@ pub fn run_native(case: &NativeCase) {
     // wrong key equivalent to the real one (same material, or a `kdf_iter` the cipher ignores)
     // proves nothing either.
     let key_len = cipher.key_len(case.config.aegis_algorithm_256);
-    if !native_keys_equivalent(&case.wrong_key, &case.config.key, cipher, key_len) && own.len() > 1
+    if !native_keys_equivalent(&case.wrong_key, &case.config.key, &case.config, key_len)
+        && own.len() > 1
     {
         let mut wrong_config = case.config.clone();
         wrong_config.key = case.wrong_key.clone();
@@ -223,7 +224,9 @@ pub fn run_rekey(case: &RekeyCase) {
     // (see run_native's own identical guard), and a pre-rekey key equivalent to the new one
     // proves nothing either.
     if let RekeyAction::ChangeKey(new_key) = &case.action {
-        if !native_keys_equivalent(&case.config.key, new_key, cipher, key_len) && own.len() > 1 {
+        if !native_keys_equivalent(&case.config.key, new_key, &case.config, key_len)
+            && own.len() > 1
+        {
             let old = dump_native(&clean, &case.config);
             assert_ne!(
                 old,
@@ -750,22 +753,38 @@ fn native_key_bytes(key: &NativeKey, key_len: usize) -> Vec<u8> {
 /// The bytes that actually determine `key`'s derived key, ignoring parts that influence only what
 /// gets stored for reopening (the embedded salt in [`NativeKey::RawWithSalt`], never consulted
 /// for the key itself since a raw key bypasses derivation entirely), a requested `kdf_iter` a
-/// cipher's own `GenerateKey*Cipher` never reads ([`Cipher::has_kdf_iter`] false), or passphrase
-/// bytes beyond [`Cipher::passphrase_prefix_len`] that the same function never reads either.
-fn native_key_material(key: &NativeKey, cipher: Cipher, key_len: usize) -> Vec<u8> {
+/// cipher's own `GenerateKey*Cipher` never reads ([`Cipher::has_kdf_iter`] false), passphrase
+/// bytes beyond [`Cipher::passphrase_prefix_len`] that the same function never reads either, or
+/// trailing zero bytes HMAC pads anyway ([`NativeConfig::passphrase_hmac_block`]).
+fn native_key_material(key: &NativeKey, config: &NativeConfig, key_len: usize) -> Vec<u8> {
     match key {
         NativeKey::Raw(key) | NativeKey::RawWithSalt { key, .. } => key[..key_len].to_vec(),
-        NativeKey::Passphrase { bytes, .. } => cipher.passphrase_prefix_len().map_or_else(
-            || bytes.clone(),
-            |limit| bytes[..bytes.len().min(limit)].to_vec(),
-        ),
+        NativeKey::Passphrase { bytes, .. } => {
+            let read = config
+                .cipher
+                .passphrase_prefix_len()
+                .map_or(bytes.as_slice(), |limit| &bytes[..bytes.len().min(limit)]);
+            match config.passphrase_hmac_block() {
+                Some(block) if read.len() <= block => {
+                    let end = read.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+                    read[..end].to_vec()
+                }
+                _ => read.to_vec(),
+            }
+        }
     }
 }
 
-/// Whether `a` and `b` derive the same key for `cipher`, so a round-trip or wrong-key oracle
+/// Whether `a` and `b` derive the same key under `config`, so a round-trip or wrong-key oracle
 /// comparing them would prove nothing.
-fn native_keys_equivalent(a: &NativeKey, b: &NativeKey, cipher: Cipher, key_len: usize) -> bool {
-    if native_key_material(a, cipher, key_len) != native_key_material(b, cipher, key_len) {
+fn native_keys_equivalent(
+    a: &NativeKey,
+    b: &NativeKey,
+    config: &NativeConfig,
+    key_len: usize,
+) -> bool {
+    let cipher = config.cipher;
+    if native_key_material(a, config, key_len) != native_key_material(b, config, key_len) {
         return false;
     }
     match (a, b) {

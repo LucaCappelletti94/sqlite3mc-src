@@ -372,6 +372,21 @@ impl NativeConfig {
             Cipher::SqlCipher => self.hmac_use.unwrap_or(true),
         }
     }
+
+    /// The block size of the HMAC a passphrase keys in this configuration's PBKDF2. HMAC pads a
+    /// key no longer than its block with zeros, so passphrases that differ only in trailing zero
+    /// bytes within it derive the same key.
+    #[must_use]
+    pub const fn passphrase_hmac_block(&self) -> Option<usize> {
+        match self.cipher {
+            Cipher::ChaCha20 => Some(64),
+            Cipher::SqlCipher => match self.kdf_algorithm {
+                Some(Algorithm::Sha1 | Algorithm::Sha256) => Some(64),
+                Some(Algorithm::Sha512) | None => Some(128),
+            },
+            Cipher::Aes128 | Cipher::Aes256 | Cipher::Ascon128 | Cipher::Aegis => None,
+        }
+    }
 }
 
 /// One native-scheme execution: write, round-trip, a wrong key, and, where authenticated, damage.
