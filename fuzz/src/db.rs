@@ -53,13 +53,6 @@ pub(crate) enum Param<'a> {
     Blob(&'a [u8]),
 }
 
-/// `sqlite3_enable_shared_cache`: process-wide, so every connection opened after the call
-/// defaults to shared-cache mode.
-pub(crate) fn enable_shared_cache(enable: bool) -> Result<(), Code> {
-    // SAFETY: takes a plain `c_int`, touches no pointers, safe to call at any time.
-    check(unsafe { ffi::sqlite3_enable_shared_cache(c_int::from(enable)) })
-}
-
 /// An open connection, closed on drop.
 pub(crate) struct Connection {
     db: NonNull<ffi::Sqlite3>,

@@ -91,7 +91,6 @@ unsafe extern "C" {
     ) -> *mut Backup;
     pub(crate) fn sqlite3_backup_step(p: *mut Backup, n_page: c_int) -> c_int;
     pub(crate) fn sqlite3_backup_finish(p: *mut Backup) -> c_int;
-    pub(crate) fn sqlite3_enable_shared_cache(enable: c_int) -> c_int;
     /// SQLite3MC's own entry points, absent from upstream SQLite.
     pub(crate) fn sqlite3mc_config(db: *mut Sqlite3, param: *const c_char, value: c_int) -> c_int;
     pub(crate) fn sqlite3mc_config_cipher(
