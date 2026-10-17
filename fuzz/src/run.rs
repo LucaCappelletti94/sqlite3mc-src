@@ -15,8 +15,8 @@ use crate::{
     ffi::{SQLITE_DONE, SQLITE_OPEN_CREATE, SQLITE_OPEN_READONLY, SQLITE_OPEN_READWRITE},
     input::{
         Algorithm, AttachCase, AttachedDb, BackupCase, Cell, Cipher, Column, NativeCase,
-        NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, SharedCacheCase, SiblingKey,
-        Table, WalCase, MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS, MAX_SIBLINGS,
+        NativeConfig, NativeKey, Op, PageSize, RekeyAction, RekeyCase, Table, WalCase,
+        MAX_ATTACHED, MAX_ATTACH_ROWS, MAX_FLIPS, MAX_OPS,
     },
 };
 
@@ -594,89 +594,6 @@ fn attach(
         .is_ok()
 }
 
-/// Runs `case` against SQLite3MC's handling of shared-cache mode.
-///
-/// A main connection creates and populates a database, then up to [`MAX_SIBLINGS`] further
-/// connections open the *same* file under shared-cache mode, each keying it with `main`'s own
-/// configuration or one of its own.
-///
-/// # Panics
-///
-/// When SQLite3MC refuses a setting or step the harness generates as valid, when `main`'s own
-/// read fails after siblings keyed with the same configuration connect, or when the file itself
-/// fails to read back cleanly under its one true key once every connection closes. A sibling
-/// workload run after another sibling keyed the file differently writes through that sibling's
-/// codec (`utelle/SQLite3MultipleCiphers` issue #281), so such a run skips the file check.
-pub fn run_shared_cache(case: &SharedCacheCase) {
-    static SERIAL: Mutex<()> = Mutex::new(());
-    let _serial = begin_run(&SERIAL);
-
-    crate::db::enable_shared_cache(true).expect("SQLite3MC accepts sqlite3_enable_shared_cache(1)");
-
-    let dir = WORKDIR.as_path();
-    let path = dir.join("shared-cache.db");
-    remove(&path);
-
-    let cipher = case.written.cipher;
-    let main = open_native(&path, &case.written, "shared-cache database");
-    if let Err(code) = main.execute(c"CREATE TABLE t0(i INTEGER, r REAL, t TEXT, b BLOB)", &[]) {
-        panic!(
-            "SQLite3MC refused to create main's own {} table: {code:?}",
-            cipher.name()
-        );
-    }
-    run_workload(&main, "SQLite3MC", &case.main_ops, case);
-
-    let mut siblings = Vec::with_capacity(case.siblings.len().min(MAX_SIBLINGS));
-    let mut one_key = true;
-    let mut foreign_write = false;
-    for sibling in case.siblings.iter().take(MAX_SIBLINGS) {
-        let Ok(connection) =
-            Connection::open(&c_path(&path), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
-        else {
-            continue;
-        };
-        let config = match &sibling.key {
-            SiblingKey::Shared => &case.written,
-            SiblingKey::Own(config) => {
-                one_key &= *config == case.written;
-                config
-            }
-        };
-        let _ = configure_native(&connection, config);
-        foreign_write |= !one_key && !sibling.ops.is_empty();
-        run_workload_tolerant(&connection, &sibling.ops);
-        siblings.push(connection);
-    }
-
-    if one_key {
-        if let Err(code) = main.execute(c"SELECT count(*) FROM sqlite_schema", &[]) {
-            panic!(
-                "SQLite3MC's main connection could not read its own {} shared-cache database \
-                 after {} sibling connection(s) keyed the same file identically for {case:#?}: \
-                 {code:?}",
-                cipher.name(),
-                siblings.len(),
-            );
-        }
-    }
-
-    drop(siblings);
-    drop(main);
-
-    if !foreign_write {
-        let own = dump_native(&path, &case.written);
-        assert!(
-            clean_read(&own),
-            "SQLite3MC corrupted its own {} shared-cache database file for {case:#?}: {}",
-            cipher.name(),
-            describe(own.iter().rev().take(3)),
-        );
-    }
-
-    remove(&path);
-}
-
 /// A per-process directory on tmpfs where there is one.
 static WORKDIR: LazyLock<PathBuf> = LazyLock::new(|| {
     let shm = Path::new("/dev/shm");
@@ -949,96 +866,82 @@ pub(crate) fn run_workload<D: std::fmt::Debug>(
     ops: &[Op],
     context: &D,
 ) {
-    run_workload_with(
-        connection,
-        ops,
-        |connection, text, params, op| match connection.execute(&sql(text), params) {
-            Ok(()) => true,
-            Err(code) => panic!("{label} failed {op:?} ({text}) with {code:?} for {context:#?}"),
-        },
-    );
-}
-
-/// Runs `ops` against an already-open, already-configured connection, silently stopping at the
-/// first statement that fails instead of panicking. For a connection whose own key or cipher may
-/// be wrong on purpose, where failure is expected and not itself a defect.
-pub(crate) fn run_workload_tolerant(connection: &Connection, ops: &[Op]) {
-    run_workload_with(connection, ops, |connection, text, params, _op| {
-        connection.execute(&sql(text), params).is_ok()
-    });
-}
-
-/// The shared dispatch `run_workload`/`run_workload_tolerant` both turn `ops` into SQL through;
-/// `run` reports whether its statement succeeded, which decides whether dependent state (a table
-/// now existing, a transaction now open) advances or the op is treated as never having happened.
-fn run_workload_with(
-    connection: &Connection,
-    ops: &[Op],
-    mut run: impl FnMut(&Connection, &str, &[Param<'_>], &Op) -> bool,
-) {
     let mut created = [false; 3];
     // Tables created inside a transaction disappear again on rollback.
     let mut before_transaction: Option<[bool; 3]> = None;
+    let run = |text: &str, params: &[Param<'_>], op: &Op| {
+        if let Err(code) = connection.execute(&sql(text), params) {
+            panic!("{label} failed {op:?} ({text}) with {code:?} for {context:#?}");
+        }
+    };
     for op in ops.iter().take(MAX_OPS) {
         let exists = |table: Table| created[table.index()];
         match op {
             Op::Create(table) => {
                 let t = TABLE_NAMES[table.index()];
-                let text =
-                    format!("CREATE TABLE IF NOT EXISTS {t}(i INTEGER, r REAL, t TEXT, b BLOB)");
-                if run(connection, &text, &[], op) {
-                    created[table.index()] = true;
-                }
+                run(
+                    &format!("CREATE TABLE IF NOT EXISTS {t}(i INTEGER, r REAL, t TEXT, b BLOB)"),
+                    &[],
+                    op,
+                );
+                created[table.index()] = true;
             }
             Op::Index(table, column) if exists(*table) => {
                 let (t, c) = (TABLE_NAMES[table.index()], column_name(*column));
-                let text = format!("CREATE INDEX IF NOT EXISTS {t}_{c} ON {t}({c})");
-                run(connection, &text, &[], op);
+                run(
+                    &format!("CREATE INDEX IF NOT EXISTS {t}_{c} ON {t}({c})"),
+                    &[],
+                    op,
+                );
             }
             Op::Insert(table, cells) if exists(*table) => {
                 let owned = cells.each_ref().map(Owned::new);
                 let params = owned.each_ref().map(Owned::param);
                 let t = TABLE_NAMES[table.index()];
-                let text = format!("INSERT INTO {t}(i, r, t, b) VALUES (?1, ?2, ?3, ?4)");
-                run(connection, &text, &params, op);
+                run(
+                    &format!("INSERT INTO {t}(i, r, t, b) VALUES (?1, ?2, ?3, ?4)"),
+                    &params,
+                    op,
+                );
             }
             Op::Update(table, rowid, column, cell) if exists(*table) => {
                 let owned = Owned::new(cell);
                 let (t, c) = (TABLE_NAMES[table.index()], column_name(*column));
                 let params = [owned.param(), Param::Integer(i64::from(*rowid))];
-                let text = format!("UPDATE {t} SET {c} = ?1 WHERE rowid = ?2");
-                run(connection, &text, &params, op);
+                run(
+                    &format!("UPDATE {t} SET {c} = ?1 WHERE rowid = ?2"),
+                    &params,
+                    op,
+                );
             }
             Op::Delete(table, rowid) if exists(*table) => {
                 let t = TABLE_NAMES[table.index()];
-                let text = format!("DELETE FROM {t} WHERE rowid = ?1");
-                run(connection, &text, &[Param::Integer(i64::from(*rowid))], op);
+                run(
+                    &format!("DELETE FROM {t} WHERE rowid = ?1"),
+                    &[Param::Integer(i64::from(*rowid))],
+                    op,
+                );
             }
-            Op::Vacuum if before_transaction.is_none() => {
-                run(connection, "VACUUM", &[], op);
-            }
+            Op::Vacuum if before_transaction.is_none() => run("VACUUM", &[], op),
             Op::Begin if before_transaction.is_none() => {
-                if run(connection, "BEGIN", &[], op) {
-                    before_transaction = Some(created);
-                }
+                run("BEGIN", &[], op);
+                before_transaction = Some(created);
             }
             Op::Commit if before_transaction.is_some() => {
-                if run(connection, "COMMIT", &[], op) {
-                    before_transaction = None;
-                }
+                run("COMMIT", &[], op);
+                before_transaction = None;
             }
             Op::Rollback => {
                 if let Some(saved) = before_transaction.take() {
-                    if run(connection, "ROLLBACK", &[], op) {
-                        created = saved;
-                    }
+                    run("ROLLBACK", &[], op);
+                    created = saved;
                 }
             }
             _ => {}
         }
     }
     if before_transaction.is_some() {
-        run(connection, "COMMIT", &[], &Op::Commit);
+        run("COMMIT", &[], &Op::Commit);
     }
 }
 
