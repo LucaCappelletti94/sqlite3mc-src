@@ -75,8 +75,8 @@ jobs:
           TARGET: ${{ steps.release.outputs.target }}
         run: ./bump.sh "$TARGET"
 
-      # A pull request from the app, unlike one from the workflow token, starts CI, CodeQL,
-      # Coverage and Sonar on it, and so does every later push to its branch.
+      # A pull request from the app, unlike one from the workflow token, starts CI, CodeQL
+      # and Coverage on it, and so does every later push to its branch.
       - if: steps.release.outputs.moved == 'yes'
         name: Mint an app token
         id: app-token
