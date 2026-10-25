@@ -3,7 +3,6 @@
 [![CI](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/ci.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/ci.yml)
 [![ClusterFuzzLite](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/cflite_build.yml/badge.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/actions/workflows/cflite_build.yml)
 [![Coverage](https://codecov.io/gh/LucaCappelletti94/sqlite3mc-src/graph/badge.svg)](https://codecov.io/gh/LucaCappelletti94/sqlite3mc-src)
-[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=LucaCappelletti94_sqlite3mc-src&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=LucaCappelletti94_sqlite3mc-src)
 [![crates.io](https://img.shields.io/crates/v/sqlite3mc-src.svg)](https://crates.io/crates/sqlite3mc-src)
 [![docs.rs](https://docs.rs/sqlite3mc-src/badge.svg)](https://docs.rs/sqlite3mc-src)
 [![license](https://img.shields.io/crates/l/sqlite3mc-src.svg)](https://github.com/LucaCappelletti94/sqlite3mc-src/blob/main/LICENSE)
