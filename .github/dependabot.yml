@@ -7,6 +7,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # CodeQL refuses to run when its init and analyze steps differ, so they move in one pull request.
+    groups:
+      codeql-action:
+        patterns:
+          - github/codeql-action*
   - package-ecosystem: cargo
     directory: /smoke
     schedule:
