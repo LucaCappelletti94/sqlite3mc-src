@@ -4,29 +4,10 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
       default-days: 7
-    # CodeQL refuses to run when its init and analyze steps differ, so they move in one pull request.
     groups:
-      codeql-action:
+      github-actions:
         patterns:
-          - github/codeql-action*
-  - package-ecosystem: cargo
-    directory: /smoke
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-  - package-ecosystem: cargo
-    directory: /wasm
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-  - package-ecosystem: cargo
-    directory: /fuzz
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
+          - "*"
