@@ -44,14 +44,6 @@ fn families() -> &'static [Family<WalCase>] {
             matches: |c| c.config.cipher == Cipher::Aegis && has_ops(c),
         },
         Family {
-            name: "legacy-wal-true",
-            matches: |c| c.legacy_wal && has_ops(c),
-        },
-        Family {
-            name: "legacy-wal-false",
-            matches: |c| !c.legacy_wal && has_ops(c),
-        },
-        Family {
             name: "checkpoint-passive",
             matches: |c| c.checkpoint == Some(Checkpoint::Passive) && has_ops(c),
         },
@@ -78,10 +70,6 @@ fn families() -> &'static [Family<WalCase>] {
         Family {
             name: "wal-truncation-absent",
             matches: |c| c.truncate_wal_tail == 0 && has_ops(c),
-        },
-        Family {
-            name: "legacy-wal-and-truncation",
-            matches: |c| c.legacy_wal && c.truncate_wal_tail > 0 && has_ops(c),
         },
         Family {
             name: "many-ops",
