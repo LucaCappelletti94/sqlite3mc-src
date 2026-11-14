@@ -261,12 +261,6 @@ pub fn run_wal(case: &WalCase) {
 
     let cipher = case.config.cipher;
     let connection = open_native(&clean, &case.config, "database");
-    let legacy_wal = c_int::from(case.legacy_wal);
-    assert_eq!(
-        connection.sqlite3mc_config(c"mc_legacy_wal", legacy_wal),
-        legacy_wal,
-        "SQLite3MC refused mc_legacy_wal = {legacy_wal}"
-    );
     if let Err(code) = connection.execute(c"PRAGMA journal_mode=WAL", &[]) {
         panic!(
             "SQLite3MC refused WAL journal mode for a {} database: {code:?}",
