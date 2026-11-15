@@ -2,9 +2,9 @@
 
 # Re-vendors the pinned release byte for byte, trusting the pinned checksum only while the release's signed SHA256SUMS lists it. bump.sh moves the pins.
 
-SQLITE3MC_VERSION="2.6.1"
-SQLITE_VERSION="3.54.0"
-ARCHIVE_SHA256="3f25af603566a23c821d8e581778b5ece2a541d2435776de57b8d845c176815a"
+SQLITE3MC_VERSION="2.7.0"
+SQLITE_VERSION="3.54.1"
+ARCHIVE_SHA256="ba563ea5407ee07d9a0331bff5e046893b69ace6f6222030c86826a851795f30"
 
 cd "$(dirname "$0")"
 . ./sigstore.sh
