@@ -31,10 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # A manual dispatch may select another ref, and only main's tree belongs here.
+      # A manual dispatch may select another ref, and only main's tree belongs here. The full history lets
+      # release-branch.sh tell human commits on a release branch from the bot's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Pick the release
@@ -96,38 +98,8 @@ jobs:
           VERSION: ${{ steps.release.outputs.target }}
         run: |
           set -euo pipefail
-          sqlite=$(sed -nE 's/^pub const SQLITE_VERSION: &str = "(.*)";$/\1/p' src/lib.rs)
-          branch="sqlite3mc/v$VERSION"
-          title="Vendor SQLite3MC $VERSION on SQLite $sqlite"
           bot_id=$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id)
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git checkout -b "$branch"
-          git add Cargo.toml Cargo.lock smoke/Cargo.lock fuzz/Cargo.lock upgrade.sh src/lib.rs sqlite3mc
-          git commit -m "$title"
-          # An unchanged push would only rerun every check, so the branch moves only when its
-          # content changed or main moved under it.
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch --depth=2 origin "$branch":refs/remotes/origin/"$branch"
-            if [ "$(git rev-parse "origin/$branch^{tree}")" = "$(git rev-parse "HEAD^{tree}")" ] \
-              && [ "$(git rev-parse "origin/$branch^")" = "$(git rev-parse HEAD^)" ]; then
-              echo "$branch already holds this content on the current main"
-            else
-              git push --force-with-lease origin HEAD:refs/heads/"$branch"
-            fi
-          else
-            git push origin HEAD:refs/heads/"$branch"
-          fi
-          open=$(gh pr list --head "$branch" --state open --json number --jq length)
-          [ "$open" -gt 0 ] || gh pr create \
-            --base main --head "$branch" \
-            --title "$title" \
-            --body "SQLite3MC $VERSION, from https://github.com/utelle/SQLite3MultipleCiphers/releases/tag/v$VERSION. The archive's checksum was taken from the release's SHA256SUMS after its Sigstore signature verified against SQLite3MC's own release workflow, and the vendored files were extracted from the archive unchanged."
-          # Every other release branch is superseded, whether its pull request is open or closed.
-          gh pr list --state open --json number,headRefName \
-            --jq ".[] | select(.headRefName | startswith(\"sqlite3mc/v\")) | select(.headRefName != \"$branch\") | .number" \
-            | while read -r n; do gh pr close "$n" --comment "Superseded by SQLite3MC $VERSION."; done
-          git ls-remote --heads origin 'refs/heads/sqlite3mc/v*' | cut -f2 \
-            | { grep -vx "refs/heads/$branch" || true; } \
-            | while read -r ref; do git push origin --delete "$ref"; done
+          ./release-branch.sh "$VERSION"
