@@ -22,10 +22,7 @@ memsubsys2-4.11          SQLite3MC's cipher tables stay allocated between sqlite
 EOF
 )
 # SQLite test files that crash through a named SQLite3MC defect, each with its reason.
-EXPECTED_CRASHES=$(cat <<'EOF'
-shared9    2.6.0's temp-file encryption stores the opening connection in the shared pager, which outlives that connection
-EOF
-)
+EXPECTED_CRASHES=""
 # SQLite test files not run, each with its reason.
 SKIP_FILES=""
 
@@ -42,9 +39,6 @@ if [ -n "${SANITIZE:-}" ]; then
 crash8  its simulated crashes end child processes holding memory, which LeakSanitizer reports on SQLite alone too
 EOF
 )
-    # Plain builds read shared9's freed connection handle there without faulting.
-    EXPECTED_CRASHES=$(printf '%s\n%s' "$EXPECTED_CRASHES" \
-        "vtab_shared  reads shared9's freed connection handle, which only the sanitizer catches")
 fi
 
 # A clean sanitizer run only counts if the binary is really instrumented.

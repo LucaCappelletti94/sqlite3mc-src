@@ -482,10 +482,6 @@ impl Checkpoint {
 pub struct WalCase {
     /// The cipher and key.
     pub config: NativeConfig,
-    /// `mc_legacy_wal`: `true` selects the older WAL frame encryption, which the project's own
-    /// source comments recommend only for recovering journals written before version 1.3.0,
-    /// not for general use.
-    pub legacy_wal: bool,
     /// Workload, at most [`MAX_OPS`] steps of it.
     pub ops: Vec<Op>,
     /// An optional `PRAGMA wal_checkpoint` before closing.
