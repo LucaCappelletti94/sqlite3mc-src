@@ -258,13 +258,14 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sqlite-wasm-rs"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "717e14271e332de37b8f7793913d53e2f952b3d21f96efd5880aea42a3c32d18"
+checksum = "36bd8e29bf08189a005b2df1df99823aa0861cabe9044e5f31ed54ca292ee618"
 dependencies = [
  "cc",
  "js-sys",
  "rsqlite-vfs",
+ "sqlite3mc-src 205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4",
  "wasm-bindgen",
 ]
 
@@ -285,6 +286,12 @@ dependencies = [
 [[package]]
 name = "sqlite3mc-src"
 version = "205.1.0+sqlite3mc-2.5.1-sqlite-3.53.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f155b7d3de6d72fb7b7c7affcba3773634c1fb2978b944b425c3d3ed5474448c"
+
+[[package]]
+name = "sqlite3mc-src"
+version = "206.1.0+sqlite3mc-2.6.1-sqlite-3.54.0"
 
 [[package]]
 name = "sqlite3mc-src-wasm"
@@ -293,7 +300,7 @@ dependencies = [
  "base64",
  "sqlite-wasm-rs",
  "sqlite-wasm-vfs",
- "sqlite3mc-src",
+ "sqlite3mc-src 206.1.0+sqlite3mc-2.6.1-sqlite-3.54.0",
  "wasm-bindgen-test",
 ]
 
